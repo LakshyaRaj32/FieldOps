@@ -22,14 +22,19 @@ export class ListJobsQueryDto {
     type: String,
   })
   @IsOptional()
-  @Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string'
-      ? value
-          .split(',')
-          .map(status => status.trim())
-          .filter(status => status !== '')
-      : value,
-  )
+  @Transform(({ value }: { value: unknown }) => {
+    const parts = (Array.isArray(value) ? value : [value]).flatMap(
+      (part: unknown) =>
+        typeof part === 'string'
+          ? part
+              .split(',')
+              .map(status => status.trim())
+              .filter(status => status !== '')
+          : [part],
+    );
+    // An empty filter (`?status=`) means no filter, not "match nothing".
+    return parts.length === 0 ? undefined : parts;
+  })
   @IsEnum(JobStatus, {
     each: true,
     message: `Status must be one of ${Object.values(JobStatus).join(', ')}.`,

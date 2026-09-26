@@ -484,6 +484,19 @@ describe('Jobs (e2e)', () => {
       expect((await get(admin, `/jobs/${job.id}`)).status).toBe(200);
     });
 
+    it('treats an empty status filter as no filter, and accepts repeated parameters', async () => {
+      await createJob();
+      await assignedJob(workerA);
+
+      const empty = dataOf<JobPage>(await get(manager, '/jobs?status='));
+      expect(empty.items).toHaveLength(2);
+
+      const repeated = dataOf<JobPage>(
+        await get(manager, '/jobs?status=PENDING&status=ASSIGNED'),
+      );
+      expect(repeated.items).toHaveLength(2);
+    });
+
     it('rejects an invalid status filter and an invalid ID', async () => {
       expect(codeOf(await get(manager, '/jobs?status=DONE'))).toBe(
         'VALIDATION_ERROR',
