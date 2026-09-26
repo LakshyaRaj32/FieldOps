@@ -15,7 +15,7 @@ import { selectSessionUser } from '../../../store/slices/sessionSlice';
 import { useThemePreference, type ThemePreference } from '../../../theme';
 import { signOut } from '../../auth/session';
 import { DiagnosticsCard } from '../components/DiagnosticsCard';
-import { InfoRow } from '../components/InfoRow';
+import { InfoRow } from '../../../components/common/InfoRow';
 
 const THEME_OPTIONS: readonly SegmentedOption<ThemePreference>[] = [
   { value: 'system', label: 'System' },

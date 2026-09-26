@@ -6,7 +6,7 @@ import { AppText, Button, Card } from '../../../components/ui';
 import { useConnectivity } from '../../../hooks/useConnectivity';
 import { useLazyCheckLivenessQuery } from '../../../services/api/healthApi';
 import { describeConnectivityStatus } from '../../../services/network/connectivity';
-import { InfoRow } from './InfoRow';
+import { InfoRow } from '../../../components/common/InfoRow';
 
 /** Throws during render so the error boundary can be verified on a device (development only). */
 function RenderErrorTrigger(): React.JSX.Element {
