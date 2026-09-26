@@ -1,0 +1,20 @@
+{
+  "name": "fieldops",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Offline-first field workforce management platform.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

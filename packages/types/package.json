@@ -1,0 +1,17 @@
+{
+  "name": "@fieldops/types",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared TypeScript domain types and contracts for FieldOps.",
+  "types": "./src/index.ts",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@fieldops/config": "*"
+  }
+}
