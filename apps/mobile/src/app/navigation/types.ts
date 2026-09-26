@@ -11,10 +11,19 @@ export type AuthStackParamList = {
   Register: undefined;
 };
 
+/** The Jobs tab: list, details and the manager's create/edit/assign screens. */
+export type JobsStackParamList = {
+  JobList: undefined;
+  JobDetail: { readonly jobId: string };
+  /** Create when `jobId` is absent, edit otherwise. */
+  JobForm: { readonly jobId?: string } | undefined;
+  AssignWorker: { readonly jobId: string };
+};
+
 /** Main tabs after sign-in. */
 export type AppTabParamList = {
   Dashboard: undefined;
-  Jobs: undefined;
+  Jobs: NavigatorScreenParams<JobsStackParamList> | undefined;
   Notifications: undefined;
   Profile: undefined;
 };
@@ -35,6 +44,12 @@ export type AppTabScreenProps<Screen extends keyof AppTabParamList> =
   CompositeScreenProps<
     BottomTabScreenProps<AppTabParamList, Screen>,
     NativeStackScreenProps<RootStackParamList>
+  >;
+
+export type JobsScreenProps<Screen extends keyof JobsStackParamList> =
+  CompositeScreenProps<
+    NativeStackScreenProps<JobsStackParamList, Screen>,
+    AppTabScreenProps<'Jobs'>
   >;
 
 // Gives useNavigation() and <Link> type checking without passing generics everywhere.

@@ -4,9 +4,12 @@ import { Role } from '@fieldops/types';
 
 import type { AppTabScreenProps } from '../../../app/navigation/types';
 import { EmptyState } from '../../../components/common/EmptyState';
+import { ErrorState } from '../../../components/common/ErrorState';
+import { LoadingState } from '../../../components/common/LoadingState';
 import {
   AppText,
   Badge,
+  Button,
   Card,
   Screen,
   type BadgeTone,
@@ -19,6 +22,11 @@ import {
 import { useAppSelector } from '../../../store/hooks';
 import { selectSessionUser } from '../../../store/slices/sessionSlice';
 import { useTheme } from '../../../theme';
+import { useListJobsInfiniteQuery } from '../../jobs/api/jobsApi';
+import { JobCard } from '../../jobs/components/JobCard';
+import { LIST_VIEWS } from '../../jobs/presentation';
+
+const UP_NEXT = { ...LIST_VIEWS.active, limit: 3 };
 
 const STATUS_TONES: Readonly<Record<ConnectivityStatus, BadgeTone>> = {
   online: 'success',
@@ -44,6 +52,15 @@ export function DashboardScreen({
   const user = useAppSelector(selectSessionUser);
   const connectivity = useConnectivity();
   const isWorker = user?.role === Role.WORKER;
+  const upNext = useListJobsInfiniteQuery(UP_NEXT);
+  const jobs = upNext.data?.pages[0]?.items ?? [];
+  const openJob = (jobId: string) =>
+    navigation.navigate('Jobs', {
+      screen: 'JobDetail',
+      params: { jobId },
+      // Keep the job list underneath, so Back returns to it.
+      initial: false,
+    });
 
   return (
     <Screen>
@@ -68,17 +85,40 @@ export function DashboardScreen({
 
       <Card>
         <AppText variant="label" tone="muted">
-          {isWorker ? "Today's jobs" : "Team's jobs"}
+          {isWorker ? 'Up next for you' : 'Up next'}
         </AppText>
-        <EmptyState
-          title="No jobs yet"
-          description={
-            isWorker
-              ? 'Jobs assigned to you will appear here, even when you are offline.'
-              : 'Jobs you assign to your team will appear here.'
-          }
-          actionLabel="Open Jobs"
-          onAction={() => navigation.navigate('Jobs')}
+        {upNext.isLoading ? <LoadingState /> : null}
+        {upNext.isError && jobs.length === 0 ? (
+          <ErrorState
+            title="Couldn't load jobs"
+            error={upNext.error}
+            onRetry={() => {
+              upNext.refetch().catch(() => undefined);
+            }}
+          />
+        ) : null}
+        {!upNext.isLoading && !upNext.isError && jobs.length === 0 ? (
+          <EmptyState
+            title="No open jobs"
+            description={
+              isWorker
+                ? 'Jobs assigned to you will appear here.'
+                : 'Create a job in the Jobs tab and assign it to a worker.'
+            }
+          />
+        ) : null}
+        {jobs.map(job => (
+          <JobCard
+            key={job.id}
+            job={job}
+            onPress={() => openJob(job.id)}
+            showAssignee={!isWorker}
+          />
+        ))}
+        <Button
+          label="Open Jobs"
+          variant="secondary"
+          onPress={() => navigation.navigate('Jobs', { screen: 'JobList' })}
         />
       </Card>
     </Screen>

@@ -12,7 +12,7 @@ export function NotificationsScreen(
     <Screen contentStyle={styles.centered}>
       <EmptyState
         title="You're all caught up"
-        description="Operational notifications arrive in Version 9."
+        description="Job and message notifications arrive with Phase 4 (Field Operations)."
       />
     </Screen>
   );

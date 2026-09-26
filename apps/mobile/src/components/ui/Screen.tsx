@@ -1,6 +1,7 @@
 import React, { type PropsWithChildren } from 'react';
 import {
   ScrollView,
+  type RefreshControlProps,
   StyleSheet,
   View,
   type StyleProp,
@@ -19,6 +20,8 @@ export interface ScreenProps {
    */
   readonly edges?: readonly Edge[];
   readonly contentStyle?: StyleProp<ViewStyle>;
+  /** Pull-to-refresh for scrolling screens. */
+  readonly refreshControl?: React.ReactElement<RefreshControlProps>;
 }
 
 const DEFAULT_EDGES: readonly Edge[] = ['left', 'right'];
@@ -29,6 +32,7 @@ export function Screen({
   scroll = true,
   edges = DEFAULT_EDGES,
   contentStyle,
+  refreshControl,
 }: PropsWithChildren<ScreenProps>): React.JSX.Element {
   const theme = useTheme();
   const padding = { padding: theme.spacing.lg, gap: theme.spacing.lg };
@@ -42,6 +46,7 @@ export function Screen({
         <ScrollView
           contentContainerStyle={[styles.grow, padding, contentStyle]}
           keyboardShouldPersistTaps="handled"
+          {...(refreshControl !== undefined && { refreshControl })}
         >
           {children}
         </ScrollView>
