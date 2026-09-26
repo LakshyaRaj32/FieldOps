@@ -12,12 +12,19 @@ assign and monitor jobs and workers in real time.
 
 | | |
 | --- | --- |
-| **Current phase** | **Phase 2: Core Product** (implemented; physical-device verification pending) |
-| Completed | Phase 1: Foundation (V0 architecture, V1 mobile foundation, V2 backend and auth) |
-| Next | Phase 3: Offline-First (not started) |
+| **Current phase** | **Phase 3: Offline-First** (implemented; physical-device verification pending) |
+| Completed | Phase 1: Foundation (V0 architecture, V1 mobile foundation, V2 backend and auth) · Phase 2: Core Product (implemented; device check pending) |
+| Next | Phase 4: Field Operations (not started) |
 
 The project is managed in six phases: [docs/master-development-plan.md](docs/master-development-plan.md),
 current state in [docs/phase-status.md](docs/phase-status.md).
+
+**Phase 3** makes the worker's app offline-first: jobs are downloaded into SQLite on the
+phone, start / complete / field notes work without a connection and survive restarts, and a
+sync engine delivers them when the connection returns, each exactly once (server-side
+idempotency), retrying with backoff and letting the server win conflicts. See
+[docs/offline-first.md](docs/offline-first.md) and
+[docs/synchronization.md](docs/synchronization.md).
 
 **Phase 2** turns the foundation into a field-work application: managers create jobs, assign
 workers and monitor status; workers see their jobs, start them and complete them.
@@ -80,7 +87,7 @@ FieldOps/
 ├── packages/
 │   ├── config/        Shared strict tsconfig base
 │   ├── types/         Shared domain and API contract types (Role, envelope, auth)
-│   └── shared/        Reserved: shared runtime code (schemas, state machines, sync protocol)
+│   └── shared/        Shared runtime code: the job state machine (API and app)
 ├── infra/
 │   └── docker/        Local infrastructure (Compose, later), images (V16)
 └── docs/              Architecture, decisions, principles, roadmap

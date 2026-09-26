@@ -215,9 +215,29 @@ Redis), cloud queues such as SQS (vendor lock-in and harder local development).
 - Durability across app kills, OS memory pressure and reboots.
 - Enough performance for thousands of jobs and tens of thousands of location points.
 
-**Library.** Chosen in V5 after a short evaluation of transaction API, JSI performance,
-New Architecture support, maintenance activity and encryption support (SQLCipher). The
-leading candidates are **op-sqlite** and **expo-sqlite**. The choice will be recorded here.
+**Library (decided in Phase 3): `react-native-nitro-sqlite` 10.**
+
+| Criterion | react-native-nitro-sqlite | op-sqlite 18 | expo-sqlite |
+| --- | --- | --- | --- |
+| New Architecture / JSI | Yes (Nitro Modules, C++) | Yes (JSI) | Yes |
+| Fits the project | **Nitro Modules is already built for MMKV v4**, same vendor (Margelo) | New native toolchain | Needs the Expo modules runtime in a bare RN CLI app |
+| Transactions | Queued async transactions with a synchronous executor inside | Yes | Yes |
+| Download / install size | ~10 MB | ~350 MB (bundles SQLCipher, libsql, extensions for many platforms) | Moderate, plus Expo modules |
+| Encryption (SQLCipher) | No | Yes | Via SQLCipher build flag |
+| Maintenance | Active (release a day before adoption) | Active | Active |
+
+The deciding factors were fit and weight on a modest development machine: the app already
+compiles Nitro Modules, and op-sqlite's size buys features FieldOps does not use yet.
+**Trade-off:** encryption at rest is not available in this binding. If Phase 5 security
+hardening requires SQLCipher, switching is contained: only `src/services/db/nitroDatabase.ts`
+imports the library (enforced by ESLint), behind the app's own `SqlDatabase` interface.
+Upstream declares `typeorm` as a dependency (for its optional TypeORM driver); the app never
+imports it, so Metro does not bundle it (verified), it only occupies `node_modules`.
+
+**Tests use Node's built-in SQLite** (`node:sqlite`, Node 22.5+) through the same
+`SqlDatabase` interface (`src/testing/nodeSqliteDatabase.ts`). Repositories, migrations and
+the sync engine are therefore tested against a real SQLite engine, including restarts (the
+same file reopened), with no extra dependency and no native module in Jest.
 
 **Alternatives.** WatermelonDB (includes its own sync model, and we are building our own sync
 engine deliberately), Realm (deprecated device sync, proprietary format), AsyncStorage or MMKV
@@ -418,6 +438,20 @@ No new dependencies were added in Phase 2. The decisions it made:
 | Mobile job data | RTK Query (online) behind feature hooks | SQLite now | SQLite and the outbox are Phase 3 scope. The hooks are the seam Phase 3 replaces |
 | Mobile schedule input | Date and 24-hour time text fields | `@react-native-community/datetimepicker` | Avoids a native dependency and rebuild for one form; revisit with Phase 6 UX polish |
 
+## Offline sync (Phase 3)
+
+| Decision | Chosen | Alternatives | Why |
+| --- | --- | --- | --- |
+| Local data model | Per job: last server copy + local view (server copy with pending commands re-applied), recomputed in the transaction of every change | Mutating local rows directly | The server copy stays authoritative and replaceable; pending work survives any refresh; the view is a pure, tested function (`projection.ts`) |
+| Outbox transport | Existing domain endpoints with `Idempotency-Key` | A batched `/sync/push` endpoint | Domain endpoints already enforce authorization and the state machine; nothing new to secure. Batching can come when volume demands it |
+| Download | Full working-set snapshot (`GET /jobs/working-set`) | Change log with a sequence cursor | Small working sets; no missed changes, revocations for free, no server change log to maintain |
+| Server idempotency storage | PostgreSQL `processed_mutations`, written in the command's transaction | Redis, an in-memory map | Durable across restarts, atomic with the change, no new infrastructure (Redis is Phase 5) |
+| Conflict arbiter for worker commands | The shared state machine | Entity version (reject any stale command) | A manager's field edit must not reject a worker's valid start; the version still guards manager edits |
+| Retry policy | Exponential backoff, full jitter, 10 counted attempts, offline failures uncounted | Fixed intervals; counting all failures | Avoids thundering herds; a long offline period never dead-letters work |
+| `@fieldops/shared` build | TypeScript source for Metro, Jest, Vitest and type checking (`exports` conditions `types` / `react-native`, test aliases); compiled `dist/` (tsc) loaded by the API at runtime, built by the API's `prebuild`/`prestart` scripts | Compile everything; ship TS to Node | No build step in the mobile and test loops; the running API is plain JavaScript. Entry modules avoid relative imports (Node ESM needs `.js`, Metro resolves extensionless source) |
+| Sync status for the UI | React context fed by the engine | Redux slice mirror | Only the UI reads it; one fewer copy |
+| Device IDs | UUIDv7 from Math.random | `react-native-get-random-values` + `uuid` | Uniqueness is all that is needed; no native dependency. Revisit if IDs must be unguessable |
+
 ## Pending decisions
 
 These are deliberately deferred to the version where the information to decide exists.
@@ -446,3 +480,5 @@ These are deliberately deferred to the version where the information to decide e
 | Secure token storage on the device | V2 | react-native-keychain 10 (see [Backend libraries (V2)](#backend-libraries-v2)) |
 | Local PostgreSQL for development | V2 | Native PostgreSQL 18 install; Docker Compose deferred by the repository owner |
 | Roadmap structure | Phase 2 | Six phases ([master-development-plan.md](master-development-plan.md)); the V0–V19 list remains the internal breakdown ([phase-status.md](phase-status.md)) |
+| Mobile SQLite library | Phase 3 | react-native-nitro-sqlite (see [SQLite (mobile)](#sqlite-mobile)) |
+| Shared runtime package | Phase 3 | `@fieldops/shared` with the job state machine; source for bundlers, `dist/` for the API |

@@ -1,8 +1,10 @@
 # FieldOps Architecture
 
-> Status: **target architecture; built through Phase 2 (Core Product).** Phase 1 built the
+> Status: **target architecture; built through Phase 3 (Offline-First).** Phase 1 built the
 > repository, the mobile foundation, the backend and authentication; Phase 2 built jobs
-> (model, assignment, state machine, history, worker and manager screens). The project is
+> (model, assignment, state machine, history, worker and manager screens); Phase 3 built the
+> offline path for workers (SQLite, outbox, sync engine, server idempotency, conflicts; see
+> [synchronization.md](synchronization.md#as-built-in-phase-3)). The project is
 > managed in six phases ([master-development-plan.md](master-development-plan.md),
 > [phase-status.md](phase-status.md)); older text labels future work with the former version
 > numbers (V5 and later), which map to phases in phase-status.md. For

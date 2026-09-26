@@ -12,6 +12,7 @@ and the API (`apps/api`) both use them.
 | Auth contracts | V2 | `UserProfile`, `AuthTokens`, `AuthResult`, login/register/refresh requests |
 | Job vocabularies | Phase 2 | `JobStatus`, `JobPriority`, `JobAction`, `JobEventType` (constant objects and types) |
 | Job contracts | Phase 2 | `JobSummary`, `JobDetail`, `JobPage`, `JobHistoryEntry`, `UserSummary`, `WorkerSummary`, create/update/assign/cancel requests |
+| Offline contracts | Phase 3 | `JobNote`, `AddJobNoteRequest`, `JobWorkingSet`; `JobAction.NOTE`; error code `IDEMPOTENCY_KEY_REUSED` |
 
 The API checks at compile time that its Prisma enums and error codes match these vocabularies
 exactly (`src/users/role.ts`, `src/jobs/job-enums.ts`, `src/common/errors/error-codes.ts`).
@@ -35,5 +36,6 @@ exactly (`src/users/role.ts`, `src/jobs/job-enums.ts`, `src/common/errors/error-
 The package is consumed as TypeScript source (`main`/`types` point to `src/index.ts`). Metro
 (React Native) bundles it directly. The NestJS API uses **types only** (`import type`), so the
 compiled API never loads it at runtime and no build step is needed. The first runtime import on
-the API side (for example the shared state machine in `@fieldops/shared`, Phase 3) must decide
-how the package is built; see `docs/technology-decisions.md`.
+the API side must decide how the package is built. `@fieldops/shared` (Phase 3) shows the
+pattern: source for bundlers and type checking, compiled `dist/` for Node; see
+`docs/technology-decisions.md`.

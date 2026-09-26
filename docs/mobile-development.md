@@ -189,10 +189,36 @@ Run from the repo root (all workspaces) or inside `apps/mobile`:
 | `npm test` | `npm test` | Jest unit tests |
 | — | `npm run format:check` / `npm run format` | Prettier check / fix |
 
-**What is tested (V1):** environment validation, the connectivity status model and slice
-transitions, session state and sign-out cache reset, error normalization, the HTTP base query
-(headers, error mapping, config failures) and theme resolution. Tests sit next to the code as
-`*.test.ts`.
+**What is tested:** environment validation, connectivity, session state and sign-out, error
+normalization, the HTTP base query (V1–V2); job presentation rules, the job form and the job API
+client (Phase 2); SQLite migrations, the local job store (persistence across restarts,
+atomicity), the projection, the retry policy and the sync engine with fault injection (Phase 3).
+Tests sit next to the code as `*.test.ts`.
+
+**SQLite in tests.** Data-layer tests run against Node's built-in SQLite
+(`src/testing/nodeSqliteDatabase.ts`), so they exercise real SQL and transactions. They need
+`@jest-environment node` at the top of the file. `src/testing/fakeJobServer.ts` implements the
+API's rules for worker commands (state machine, assignment, idempotency) with fault injection:
+network down, lost responses, HTTP errors.
+
+**Live offline sync test (against the real API).** `src/features/jobs/data/liveSync.test.ts`
+runs the app's data layer against a running API and database. It is skipped by default. To
+run it against the test database:
+
+```bash
+# terminal 1 (apps/api): the compiled API on port 3000 against fieldops_test
+npm run build
+APP_ENV=development PORT=3000 \
+DATABASE_URL=postgresql://fieldops:fieldops@localhost:5432/fieldops_test \
+JWT_ACCESS_SECRET=e2e-access-secret-0123456789abcdefghijklmnop \
+JWT_REFRESH_SECRET=e2e-refresh-secret-0123456789abcdefghijklmno \
+node dist/main.js
+
+# terminal 2 (apps/mobile)
+FIELDOPS_LIVE_API=1 \
+FIELDOPS_LIVE_DATABASE_URL=postgresql://fieldops:fieldops@localhost:5432/fieldops_test \
+npx jest src/features/jobs/data/liveSync.test.ts
+```
 
 **Writing tests:**
 
@@ -206,7 +232,8 @@ transitions, session state and sign-out cache reset, error normalization, the HT
 **Lint boundaries to know about:**
 
 - Import `react-native-config` only in `src/app/config`, NetInfo only in `src/services/network`,
-  and MMKV only in `src/services/storage`.
+  MMKV and Keychain only in `src/services/storage`, and `react-native-nitro-sqlite` only in
+  `src/services/db`.
 - The global `fetch` is not allowed. Add an RTK Query endpoint with `baseApi.injectEndpoints()`.
 - `console` is not allowed. Use `logger` from `src/utils/logger.ts`.
 
@@ -259,6 +286,28 @@ Run these on the physical phone with the API running and `adb reverse` active:
 14. **V1 features.** Tabs, connectivity banner, theme switching (and persistence), diagnostics
     (**Check API connection** now succeeds) and **Simulate render error** behave as in
     Version 1.
+
+## Offline demo on the phone (Phase 3)
+
+Needs a manager and a worker account (grant the role with
+`npm run user:set-role -w @fieldops/api -- <email> MANAGER`), the API running and
+`npm run mobile:reverse`. Use a second device, Swagger or Postman for the manager.
+
+1. **Online download.** Sign in on the phone as the worker. The manager creates a job and
+   assigns it to the worker. On the phone, pull down on Jobs: the job appears.
+2. **Go offline.** Turn on airplane mode (or stop the API: the app cannot tell the
+   difference, which is the point). The offline banner appears.
+3. **Restart offline.** Swipe the app away and reopen it: signed in, the job is there.
+4. **Work offline.** Open the job → **Start job** (instant, "Waiting to sync"), add a note,
+   **Complete job**. The sync banner says the changes are saved on the phone.
+5. **Force close** and reopen: the job still shows *Completed*, with 3 changes waiting
+   (Profile › Offline sync).
+6. **Reconnect.** Turn airplane mode off. Within seconds the banner goes away (or tap
+   **Sync now**). The manager sees the job *Completed* with the note and one Started and one
+   Completed entry in the history.
+7. **Conflict.** Assign a second job, go offline, start it on the phone, and cancel it as the
+   manager. Reconnect: the phone shows *Cancelled* and "“Start job” on … was not applied: the
+   job changed while you were offline." Dismiss it.
 
 ## Troubleshooting
 

@@ -4,23 +4,28 @@ The project is managed in six phases ([master-development-plan.md](master-develo
 This file records where the project stands. Update it at every phase checkpoint.
 
 ```text
-Current Phase:   Phase 2 — Core Product
-Phase Status:    IMPLEMENTED — awaiting physical-device verification
+Current Phase:   Phase 3 — Offline-First
+Phase Status:    IMPLEMENTED — awaiting physical-device verification (BLOCKED: no device)
 Completed Phase: Phase 1 — Foundation
-Next Phase:      Phase 3 — Offline-First
+Next Phase:      Phase 4 — Field Operations
 ```
 
-Phase 2 becomes **COMPLETE** only after the physical Android workflow in
-[Verification still required](#verification-still-required) passes. Then set:
+Phases 2 and 3 are implemented and verified by automated tests, including an end-to-end run of
+the app's offline data layer against the real API and PostgreSQL. **Neither has been run on the
+physical Android phone yet**: no device was connected (`adb devices` empty) during either
+implementation session. Both device checklists can be done in one sitting:
+[Phase 2](#verification-still-required) first, then [Phase 3](#phase-3-device-verification).
+
+When they pass, set:
 
 ```text
-Current Phase:   Phase 2 — Core Product
+Current Phase:   Phase 3 — Offline-First
 Phase Status:    COMPLETE
-Completed Phase: Phase 2 — Core Product
-Next Phase:      Phase 3 — Offline-First
+Completed Phase: Phase 3 — Offline-First (Phase 2 — Core Product also complete)
+Next Phase:      Phase 4 — Field Operations
 ```
 
-and create the `phase-2-core-product` tag.
+and create the tags `phase-2-core-product` and `phase-3-offline-first`.
 
 ## Phase overview
 
@@ -28,10 +33,17 @@ and create the `phase-2-core-product` tag.
 | --- | --- | --- |
 | 1 — Foundation | V0, V1, V2 | Complete (see [roadmap.md](roadmap.md) for the V0–V2 checklists) |
 | 2 — Core Product | Jobs (the former V4 job model and screens) | Implemented, device verification pending |
-| 3 — Offline-First | V5, V6 (plus the offline half of the former V4) | Not started |
+| 3 — Offline-First | Local SQLite, sync engine, conflict resolution (see the note below) | Implemented, device verification pending |
 | 4 — Field Operations | V7, V8, V9 | Not started |
 | 5 — Production Engineering | V10, V11, V12, V13, V15, V18 | Not started |
 | 6 — Showcase Release | V14, V16, V17, V19 | Not started |
+
+**Legacy version numbers for Phase 3.** The master plan maps Phase 3 to "former V4 + V5 +
+V6", described in the Phase 3 brief as *V4 → local SQLite / offline persistence, V5 →
+synchronization engine, V6 → conflict resolution*. The original [roadmap.md](roadmap.md)
+numbered them differently (V4 jobs, V5 offline SQLite, V6 sync engine including conflict
+policies). Both are kept as written; the content is the same: Phase 3 is local persistence,
+the sync engine and conflict resolution together.
 
 **Not yet placed in a phase: organizations and tenancy (the former V3).** The master plan does
 not assign them. Phase 2 runs as a single organization: managers and admins manage every job.
@@ -155,3 +167,126 @@ retries, concurrent edits, pagination and deletion rules.
   work).
 - No automated UI rendering tests; mobile tests cover the API client and the pure rules
   (which buttons show, form validation, formatting). Maestro-style device E2E is later work.
+
+---
+
+## Phase 3 — Offline-First
+
+### What was implemented
+
+**Mobile (`apps/mobile`)**
+
+- **SQLite** through `react-native-nitro-sqlite`, behind a small `SqlDatabase` interface
+  (`src/services/db`), with forward-only migrations in `PRAGMA user_version` (schema v1).
+- **One database per worker**, opened at sign-in or offline session restore.
+- **Local job store:** per job the last server copy and the local view (server copy + pending
+  commands), recomputed in the same transaction as every change.
+- **Offline commands:** start, complete and add a field note. Each is validated with the shared
+  state machine and written together with its outbox entry in one transaction. The UI updates
+  at once, with no network needed.
+- **Outbox** (`pending`, `in_flight`, `synced`, `failed`, `conflict`), durable across restarts.
+  Mutation IDs (UUIDv7) are created once and reused on every attempt.
+- **Sync engine:**
+  - Pushes in outbox order, and a job waiting for a retry holds back its later commands.
+  - Then downloads the working set.
+  - Exponential backoff with full jitter; offline failures don't count as attempts; dead letter
+    after 10 counted attempts.
+  - Server-wins conflicts.
+  - One cycle at a time, and in-flight entries are recovered after a crash.
+- **Triggers:** app start and sign-in, foreground, connectivity regained, every local command,
+  pull-to-refresh, "Sync now", and the engine's retry timer.
+- **Local-first screens for workers:** job list, job details (including the note composer) and
+  dashboard read SQLite and update after every committed change. Managers stay online.
+- **Sync status:** a global banner, per-job badges, rejected changes with their reasons
+  (Dismiss / Try again), a Profile › Offline sync card with "Sync now", and a warning before
+  signing out with unsynced changes.
+
+**Backend (`apps/api`)**
+
+- **`Idempotency-Key`** on `POST /jobs/:id/start`, `/complete` and `/notes`. It is recorded in
+  `processed_mutations` in the same transaction as the change. A retry is a replay, concurrent
+  duplicates are resolved by the primary key, and a key reused for another command gets
+  `422 IDEMPOTENCY_KEY_REUSED`.
+- **Field notes** (`job_notes`, `POST /jobs/:id/notes`): append-only, with device-generated IDs,
+  on jobs in any status. `JobDetail` gains `fieldNotes`, and workers' `allowedActions` gain `note`.
+- **`GET /jobs/working-set`:** the worker's offline snapshot, meaning open jobs plus jobs closed
+  in the last 7 days.
+- Migration `20260926171517_offline_sync`.
+
+**Shared (`packages/shared`)**
+
+- **`@fieldops/shared`** is a real package now. It holds the job state machine, moved from the
+  API, which the API enforces and the phone uses to validate commands offline.
+
+### Important decisions
+
+| Decision | Why |
+| --- | --- |
+| react-native-nitro-sqlite over op-sqlite | The app already builds Nitro Modules (MMKV). It is about 10 MB against about 350 MB, and the swap is contained behind `SqlDatabase`. Trade-off: no SQLCipher, and encryption is Phase 5 |
+| Commands through the domain endpoints plus `Idempotency-Key`, not a `/sync/push` batch | The endpoints already enforce authorization and the state machine, so there is nothing new to secure |
+| Working-set snapshot instead of a change-log cursor | Working sets are small, a snapshot can't miss a change, and revocations come for free |
+| The state machine, not `version`, decides worker commands | A manager's edit must not reject a worker's valid start. `version` still guards manager edits |
+| Offline failures don't count toward the retry limit | A worker offline for days must never dead-letter their work |
+| Server copy and local view kept separately | The server stays authoritative, and a refresh can never erase unsynced work |
+| Sign-out deletes local data only when nothing is unsynced | Unsynced work is never discarded |
+| Field notes added in this phase | The master plan's Phase 3 demo includes "Add Notes", and append-only notes show the no-conflict path |
+
+### Testing status
+
+| Suite | Command | Result |
+| --- | --- | --- |
+| Shared | `npm test -w @fieldops/shared` | 20 passed (the state machine, moved from the API) |
+| API unit | `npm test -w @fieldops/api` | 69 passed |
+| API E2E (real PostgreSQL) | `npm run api:test:e2e` | 108 passed (21 new: working set, idempotency including concurrent duplicates, notes, conflicts, a replayed offline session) |
+| Mobile | `npm test -w @fieldops/mobile` | 174 passed, 2 skipped (the live tests below); 58 new |
+| Live offline sync (app data layer ⇄ real API + PostgreSQL) | see [mobile-development.md](mobile-development.md#testing-and-quality-checks) | **2 passed**: the full offline session with a restart and lost responses (each command applied exactly once, and phone and server converge), and a cancelled-while-offline conflict (server state kept) |
+| Typecheck / lint | `npm run typecheck`, `npm run lint` | Pass, 0 warnings |
+| Android | `gradlew assembleDebug` (arm64-v8a) and `react-native bundle` | Both succeed. `libRNNitroSQLite.so` is packaged, and TypeORM (an upstream dependency) is not bundled |
+
+The mobile data-layer tests run against real SQLite (`node:sqlite`) and cover:
+
+- persistence across restarts, and atomicity under an injected mid-transaction crash;
+- migrations: rollback on failure, and refusing a newer schema;
+- the projection;
+- the retry policy;
+- sync-engine behavior: success, ordering, offline, temporary failure then success, dead
+  letter, isolation of a permanent failure, lost responses, recovery of a command left in
+  flight after a crash, single flight, cancellation and reassignment conflicts, and the full
+  offline session across a restart.
+
+### Build and deployment status
+
+- API: `npm run api:build` succeeds; `prebuild` builds `@fieldops/shared`, and the compiled API
+  loads it at runtime.
+- Android debug APK builds (see above). No staging deployment yet (Phase 6).
+
+### Phase 3 device verification
+
+Not done: no device was connected. Run the
+[offline demo on the phone](mobile-development.md#offline-demo-on-the-phone-phase-3):
+
+1. download;
+2. airplane mode;
+3. restart offline;
+4. start, note, complete;
+5. force close;
+6. reconnect and confirm convergence;
+7. conflict.
+
+Also check that `adb logcat` shows no SQLite errors at start-up.
+
+### Known issues and limitations
+
+- **Not verified on the physical device** (see above).
+- The local database is **not encrypted** (planned for Phase 5), and IDs created on the device
+  use Math.random (unique, not secret).
+- Sync runs only while the app is in use (start, foreground, reconnect, timers). There's no
+  background sync yet (WorkManager, Phase 4 or later).
+- `processed_mutations` rows are never pruned yet (planned: 90 days, with the Phase 5 workers).
+- A command whose response was lost and whose job was then reassigned gets a 404 on retry and
+  is shown as a conflict, even though the server did apply it. This is a rare edge case: the
+  server state stays correct, and only the phone's message is misleading.
+- The worker's working set is capped at 200 jobs, and there's no change-log sync for larger
+  sets.
+- Only worker job commands work offline; manager screens need a connection, by design.
+- Checklist completion, photos, signatures, location and messages are not implemented (Phase 4).

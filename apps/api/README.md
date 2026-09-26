@@ -3,8 +3,11 @@
 The FieldOps backend: a **NestJS 12 modular monolith** in TypeScript (ESM), backed by
 **PostgreSQL** through **Prisma 7**.
 
-**Status:** Phase 2 (Core Product). Backend foundation, authentication and sessions (Phase 1),
-plus jobs: model, assignment, state machine, history and authorization (Phase 2). Redis,
+**Status:** Phase 3 (Offline-First). Backend foundation, authentication and sessions (Phase 1),
+jobs: model, assignment, history and authorization (Phase 2), and the server side of offline
+sync: `Idempotency-Key` on device commands, field notes and the worker's working set (Phase 3).
+The job state machine comes from `@fieldops/shared`, built automatically before `build` and
+`start`. Redis,
 BullMQ and WebSockets arrive in later phases ([phase status](../../docs/phase-status.md)).
 
 ## Quick start
@@ -33,7 +36,8 @@ PostgreSQL setup, tests, the phone connection and staging preparation:
 | `GET` | `/api/v1/jobs`, `/api/v1/jobs/:id` | Bearer (workers: own jobs only) |
 | `PATCH`, `DELETE` | `/api/v1/jobs/:id` | Bearer, `MANAGER`/`ADMIN` |
 | `POST` | `/api/v1/jobs/:id/assign`, `/cancel` | Bearer, `MANAGER`/`ADMIN` |
-| `POST` | `/api/v1/jobs/:id/start`, `/complete` | Bearer, the assigned `WORKER` |
+| `POST` | `/api/v1/jobs/:id/start`, `/complete`, `/notes` | Bearer, the assigned `WORKER` (optional `Idempotency-Key`) |
+| `GET` | `/api/v1/jobs/working-set` | Bearer, `WORKER` |
 | `GET` | `/health/live`, `/health/ready` | public |
 
 ## Source layout
@@ -41,7 +45,7 @@ PostgreSQL setup, tests, the phone connection and staging preparation:
 ```text
 apps/api/
 ├── prisma/
-│   ├── schema.prisma            users, sessions, jobs, job_checklist_items, job_events
+│   ├── schema.prisma            users, sessions, jobs, job_checklist_items, job_events, job_notes, processed_mutations
 │   └── migrations/              committed SQL migrations
 ├── prisma.config.ts             Prisma 7 CLI config (schema, migrations, DATABASE_URL)
 ├── scripts/set-role.mjs         operator tool: grant a role by email

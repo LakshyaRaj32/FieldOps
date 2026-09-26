@@ -8,8 +8,22 @@ production-oriented architecture\
 **Budget:** ₹0 project budget; prefer local/open-source/free-tier
 infrastructure
 
-> **Current status:** Phase 1 complete; Phase 2 implemented, awaiting physical-device
-> verification. Details, decisions and known issues: [phase-status.md](phase-status.md).
+> **Current status:** Phase 1 complete. Phases 2 and 3 implemented and verified by automated
+> tests (including the offline data layer against the real API); both await verification on
+> the physical Android phone. Next: Phase 4. Details, decisions and known issues:
+> [phase-status.md](phase-status.md).
+>
+> ```text
+> V0 COMPLETE · V1 COMPLETE · V2 COMPLETE
+>         ↓
+> Phase 1 — Foundation          COMPLETE
+>         ↓
+> Phase 2 — Core Product        IMPLEMENTED (device check pending)
+>         ↓
+> Phase 3 — Offline-First       IMPLEMENTED (device check pending)
+>         ↓
+> Phase 4 — Field Operations    NEXT
+> ```
 
 ## 1. Project Vision
 
@@ -472,6 +486,16 @@ Correct Final State
 ```
 
 **Checkpoint:** `phase-3-offline-first`
+
+**Status:** implemented. SQLite (react-native-nitro-sqlite) with migrations; per-job server
+copy plus local view; durable outbox; sync engine with ordering, backoff with jitter, dead
+letter and server-wins conflicts; `Idempotency-Key` recorded in PostgreSQL; field notes;
+worker working-set snapshot. The critical demonstration passes against the real API in an
+automated test; physical-device verification pending. Legacy mapping as written in the Phase
+3 brief: V4 → local SQLite / offline persistence, V5 → synchronization engine, V6 → conflict
+resolution (the original roadmap numbered these V5 and V6; see
+[phase-status.md](phase-status.md)). Built design and deliberate deviations:
+[synchronization.md](synchronization.md#as-built-in-phase-3).
 
 At this point the project already qualifies as a strong portfolio
 project.

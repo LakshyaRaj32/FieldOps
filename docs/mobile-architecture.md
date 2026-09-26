@@ -1,10 +1,11 @@
 # Mobile Architecture
 
-> Status: **Phase 1 and Phase 2 implemented** (Phase 1 / V1–V2: project, navigation, state,
+> Status: **Phases 1–3 implemented** (Phase 1 / V1–V2: project, navigation, state,
 > connectivity, API layer, environments, UI foundation, error handling, real authentication,
 > secure token storage, session restore and token refresh, see
 > [authentication.md](authentication.md#8-mobile-app); Phase 2: the jobs feature, see
-> [Jobs (Phase 2)](#jobs-phase-2)). Later layers arrive in V5 (SQLite), V6 (sync), V7 (Kotlin location), V8 (realtime), V9 (push and media) and V14
+> [Jobs (Phase 2)](#jobs-phase-2); Phase 3: SQLite, the outbox and the sync engine for the
+> worker's jobs, see [6. SQLite access layer](#6-sqlite-access-layer-phase-3)). Later layers arrive in V5 (SQLite), V6 (sync), V7 (Kotlin location), V8 (realtime), V9 (push and media) and V14
 > (performance). How to run and develop the app: [mobile-development.md](mobile-development.md).
 
 ## 1. Goals
@@ -101,9 +102,9 @@ repositories).
 | --- | --- | --- | --- | --- | --- |
 | 1 | UI state | Component state; Redux slices when shared across screens | Form inputs, open sheets, selected filter | Hold domain entities as truth | Component state only |
 | 2 | Server state (online-only) | RTK Query | Manager dashboard, worker list, admin screens | Be used for offline-critical data | Base API + health check; Phase 2 jobs (interim, see [Jobs](#jobs-phase-2)) |
-| 3 | Persistent local application data | SQLite | Assigned jobs, job events, attachment metadata, messages | Be mirrored wholesale into Redux | V5 |
-| 4 | Offline mutations | SQLite outbox (same DB, same transaction as the domain write) | `job.complete`, `job.note.add` | Live anywhere in-memory-only | V5–V6 |
-| 5 | Synchronization state | SQLite (truth); Redux mirror for display | Cursor, pending count, failures | Be lost on restart | V6 |
+| 3 | Persistent local application data | SQLite | Assigned jobs, job events, attachment metadata, messages | Be mirrored wholesale into Redux | Phase 3: the worker's jobs |
+| 4 | Offline mutations | SQLite outbox (same DB, same transaction as the domain write) | `job.complete`, `job.note.add` | Live anywhere in-memory-only | Phase 3: start, complete, note |
+| 5 | Synchronization state | SQLite (truth); React context for display | Pending count, failures, last sync | Be lost on restart | Phase 3 |
 | 6 | Native device capabilities | Kotlin modules and native buffers | Location capture, background scheduling | Depend on the JS thread being alive | V7 |
 
 Two additional stores exist for specific purposes:
@@ -138,23 +139,43 @@ Two additional stores exist for specific purposes:
                                FieldOps API
 ```
 
-In V1 only the Redux and RTK Query paths exist.
+Since Phase 3, all paths exist for the worker's jobs. The reactive read hook is
+`useLocalQuery` (behind `useLocalJobs` / `useLocalJob`), and the sync engine lives with the
+feature (`features/jobs/data/syncEngine.ts`) rather than in `services/sync`: it is job-specific
+by design, not a generic framework.
 
-## 6. SQLite access layer (V5)
+## 6. SQLite access layer (Phase 3)
 
-- **One database connection** managed by `services/db`, opened and migrated during startup
-  before any screen renders data.
-- **Migrations** are versioned SQL files, forward-only, applied in a transaction and tested
-  against snapshots of older schemas.
-- **Repositories per feature** expose typed functions (`getAssignedJobs()`,
-  `completeJob(cmd)`). Raw SQL stays inside repositories.
-- **Transaction helper**: `db.transaction(async (tx) => { ... })` is the only way to write.
-  Every write that must sync also enqueues its outbox entry through `tx`.
-- **Reactive queries.** After each committed transaction, the data layer emits the set of
-  changed tables. `useLiveQuery(sql, deps, tables)` re-runs affected queries. This is a small,
-  explicit mechanism. We do not use a heavy ORM.
-- **Row validation.** Rows are mapped to domain types through typed mappers. JSON columns are
-  validated with the shared schemas.
+```text
+services/db/
+├── database.ts          SqlDatabase: async reads, synchronous work inside transaction()
+├── nitroDatabase.ts     device implementation (react-native-nitro-sqlite; sole importer, ESLint)
+└── migrations.ts        forward-only migrations in PRAGMA user_version, one transaction each
+features/jobs/data/
+├── localSchema.ts       migration 1: jobs (server_json + local_json), outbox, sync_state
+├── localJobStore.ts     the repository: reads, local commands, outbox state, working-set apply
+├── projection.ts        local view = server copy + pending commands (pure)
+├── syncEngine.ts        push outbox → pull working set; retry, conflicts, single flight
+├── retryPolicy.ts       failure classification and backoff
+├── apiTransport.ts      engine ⇄ API through RTK Query (auth, refresh, error mapping)
+├── offlineSession.ts    one database file per worker; open, migrate, release
+├── OfflineJobsProvider.tsx  session lifecycle + sync triggers (start, foreground, reconnect)
+└── OfflineJobsContext.ts    useOfflineJobs, useLocalJobs, useLocalJob, useProblemEntries
+testing/
+├── nodeSqliteDatabase.ts    SqlDatabase on node:sqlite for tests (real SQLite in Jest)
+└── fakeJobServer.ts         the API's rules + fault injection, for engine tests
+```
+
+- **One database per worker**, opened (and migrated before anything reads) at sign-in or
+  offline session restore. Managers do not get one: their screens are online.
+- **Writes only in transactions**; every local command writes its outbox entry and the
+  recomputed local view together.
+- **Reactive reads:** the store notifies subscribers after each committed transaction;
+  `useLocalQuery` re-runs its read. Small and explicit, no ORM.
+- **Row validation:** stored jobs are parsed with the same runtime guard as API responses
+  (`isJobDetail`).
+- Details and policies: [offline-first.md](offline-first.md#as-built-in-phase-3) and
+  [synchronization.md](synchronization.md#as-built-in-phase-3).
 
 ## 7. Redux Toolkit and RTK Query
 
@@ -252,9 +273,15 @@ jobs/
   refetch brings it up to date and the app explains what happened.
 - **Responses are validated** (`queryFn` + guards); a malformed body becomes a `parse` error,
   shown by the normal error state.
-- **Interim data source.** Phase 2 reads jobs online through RTK Query. Screens depend only on
-  the hooks exported from `jobsApi.ts`; Phase 3 moves the worker's jobs to SQLite (with the
-  outbox for start/complete) behind the same feature API.
+- **Data sources since Phase 3.** Workers: SQLite (`WorkerJobDetail`, the worker list and
+  dashboard), with commands through the local store and the outbox. Managers and admins: RTK
+  Query (`ManagerJobDetail`, the manager list), online by design. The split is by role, in
+  one place per screen (`JobsScreen`, `JobDetailScreen`), and shared rendering lives in
+  `components/JobDetailSections.tsx`.
+- **Sync status UI.** `SyncStatusBanner` (below the connectivity banner on every screen, only
+  when something is unsynced or rejected), a badge per job ("Waiting to sync", "Needs
+  attention"), `SyncProblemList` (reason, Dismiss, Try again) and `SyncCard` on Profile with
+  "Sync now".
 
 ## 9. Native modules (Kotlin, V7+)
 

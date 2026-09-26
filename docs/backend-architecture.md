@@ -1,9 +1,10 @@
 # Backend Architecture
 
-> Status: **implemented through Phase 2 (Core Product).** The NestJS application exists in
+> Status: **implemented through Phase 3 (Offline-First).** The NestJS application exists in
 > `apps/api` with configuration, Prisma/PostgreSQL, the HTTP pipeline, health checks, `auth`,
-> `users` (Phase 1) and `jobs` (Phase 2; see [api.md](api.md#jobs) and
-> [database.md](database.md)). Setup: [backend-development.md](backend-development.md) and
+> `users` (Phase 1) and `jobs` (Phase 2; since Phase 3 also idempotent device commands, field
+> notes and the worker's working set; see [api.md](api.md#jobs), [api.md](api.md#offline-sync)
+> and [database.md](database.md)). Setup: [backend-development.md](backend-development.md) and
 > [authentication.md](authentication.md). The rest of this document is the design that later
 > versions follow. Where V2 deliberately deviated from the V0 design, the text says so.
 > Modules are added in the versions listed below.
@@ -46,9 +47,9 @@ open WebSocket connections.
 | `auth` | Login, token issuance and rotation, logout, session and device binding, password hashing | V2 |
 | `users` | User profiles, role assignment (admin), user lifecycle | V2 (table, profile, admin list); Phase 2 added the assignable-workers list |
 | `organizations` | Tenancy, org settings | V3 |
-| `jobs` | Jobs, assignment, job state machine, job history (`job_events`), job policy | **Phase 2 (implemented)** |
+| `jobs` | Jobs, assignment, job history (`job_events`), job policy, field notes (`job_notes`), device-command idempotency (`processed_mutations`), the worker's working set | **Phase 2–3 (implemented)**; the state machine is in `@fieldops/shared` |
 | `audit` | Append-only audit log writer and query API (admin) | Phase 5 (job-related history already lives in `job_events`) |
-| `sync` | Push/pull endpoints, `processed_mutations`, `change_log`, visibility filtering | V6 |
+| `sync` | Batched push/pull, `change_log`, visibility filtering | Not needed yet: Phase 3 syncs through the jobs module's domain endpoints and a working-set snapshot ([synchronization.md](synchronization.md#deliberate-deviations-from-the-design-below)). Created when a second entity syncs or working sets outgrow snapshots |
 | `locations` | Batched location ingestion, latest-position queries, retention | V7 |
 | `messaging` | Conversations, messages, WebSocket delivery | V8 |
 | `realtime` | Socket.IO gateway, authentication on handshake, room policy, event envelopes | V8 |
@@ -187,6 +188,16 @@ wrong status → `409`.
   joins and AI tool calls. There is one source of authorization truth.
 - Authorization failures return `403` without revealing whether the resource exists in
   another tenant (`404` where appropriate).
+
+### Device-command idempotency (Phase 3)
+
+`POST /jobs/:id/start`, `/complete` and `/notes` accept an `Idempotency-Key`. `JobsService`
+looks the key up in `processed_mutations` (replay: the current job), otherwise runs the
+command with the record passed to the repository, which inserts it **first** in the command's
+transaction. A unique violation there can only mean a concurrent duplicate, which then replays;
+a failed compare-and-set rolls the record back with the change, so rejections are never
+recorded. The general `Idempotency-Key` interceptor for all critical commands remains Phase 5
+work.
 
 ## 10. Realtime (V8)
 
