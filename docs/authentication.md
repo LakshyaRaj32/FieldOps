@@ -142,7 +142,7 @@ One row in `sessions` per signed-in device (per login or registration):
   hardening option.
 - **Auditing**: the session rows already record who signed in, when, from which user agent,
   when the session was last used, and how and when it ended. A general append-only
-  `audit_log` arrives with V4 ([backend-architecture.md](backend-architecture.md#13-audit-logging)).
+  `audit_log` arrives with Phase 5 security work ([backend-architecture.md](backend-architecture.md#13-audit-logging)).
 
 ## 6. Refresh token rotation and reuse detection
 
@@ -192,7 +192,7 @@ at some cost to reuse detection.
 - Granting roles: there is no role-management API yet. Operators use
   `npm run user:set-role -w @fieldops/api -- <email> <ROLE>`.
 - Not yet: permissions (`job:assign`), resource policies ("is this worker assigned to this
-  job?") and tenancy. They arrive with the resources they protect (V3 organizations, V4 jobs),
+  job?") and tenancy. They arrive with the resources they protect (jobs in Phase 2; organizations later),
   as described in [backend-architecture.md](backend-architecture.md#9-authorization).
 
 ## 8. Mobile app
@@ -261,7 +261,7 @@ This version is a sound foundation, **not** a production-hardened system. Known 
 - **Rate limiting and lockout** (V11): until then, login can be brute-forced at network speed.
 - **Email verification, password reset, password change** (with "revoke all other sessions"):
   not implemented.
-- **Audit log** of authentication events (V4 writer), and alerting on `REFRESH_TOKEN_REUSE`.
+- **Audit log** of authentication events (Phase 5), and alerting on `REFRESH_TOKEN_REUSE`.
 - **Key management** (V18): asymmetric signing with key IDs and rotation; secrets in the
   platform's secret manager (V16).
 - **Absolute session lifetime** and an idle timeout separate from the sliding expiry.

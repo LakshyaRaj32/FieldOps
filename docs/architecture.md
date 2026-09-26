@@ -1,7 +1,11 @@
 # FieldOps Architecture
 
-> Status: **target architecture; built through Version 1** (repository foundation and mobile
-> app foundation). Anything not yet built is labeled with the version that introduces it. For
+> Status: **target architecture; built through Phase 2 (Core Product).** Phase 1 built the
+> repository, the mobile foundation, the backend and authentication; Phase 2 built jobs
+> (model, assignment, state machine, history, worker and manager screens). The project is
+> managed in six phases ([master-development-plan.md](master-development-plan.md),
+> [phase-status.md](phase-status.md)); older text labels future work with the former version
+> numbers (V5 and later), which map to phases in phase-status.md. For
 > the reasoning behind each technology, see [technology-decisions.md](technology-decisions.md).
 
 ## 1. Purpose
@@ -161,8 +165,11 @@ document and [technology-decisions.md](technology-decisions.md).
 
 ## 7. Conceptual domain model
 
-This is the initial model. V2 implemented `User` and `Session` ([database.md](database.md)); later
-versions refine the rest.
+This is the initial model. V2 implemented `User` and `Session`; Phase 2 implemented `Job`,
+job history (`JobEvent`) and checklist items ([database.md](database.md)). Phase 2 keeps the
+current assignee on the job row and assignment history in `JobEvent` instead of a separate
+`JobAssignment` table (one worker per job is all the workflow needs). Organizations are not
+built yet: the deployment is a single organization.
 
 ```text
 Organization 1───* User (role: WORKER | MANAGER | ADMIN)

@@ -2,11 +2,12 @@
 
 The FieldOps React Native application for Android. It serves both field workers and managers.
 
-**Status:** Version 2. On top of the V1 foundation (navigation, state management, the API
-layer, connectivity, environment configuration, UI and theme, error handling), the app has real
-authentication against the FieldOps API: register, sign in, Keystore-backed token storage,
-session restore, transparent token refresh and sign-out. Features arrive in later versions
-(jobs in V4, offline storage in V5, sync in V6, and so on).
+**Status:** Phase 2 (Core Product). On top of the Phase 1 foundation (navigation, state
+management, the API layer, connectivity, environment configuration, UI and theme, error
+handling, real authentication with Keystore-backed tokens, session restore and refresh), the
+app has jobs: workers see their jobs and start and complete them; managers create, edit and
+assign jobs and monitor their status. Offline storage and sync arrive in Phase 3
+([phase status](../../docs/phase-status.md)).
 
 ## Quick start
 

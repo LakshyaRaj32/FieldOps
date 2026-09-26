@@ -3,11 +3,18 @@
 Shared TypeScript types that describe the FieldOps domain. The mobile app (`apps/mobile`)
 and the API (`apps/api`) both use them.
 
-## Current contents (Version 0)
+## Current contents
 
-| Export | Description |
-| --- | --- |
-| `Role` | The role vocabulary: `WORKER`, `MANAGER`, `ADMIN`. It is both a runtime constant object and a type. |
+| Export | Since | Description |
+| --- | --- | --- |
+| `Role` | V0 | The role vocabulary: `WORKER`, `MANAGER`, `ADMIN`. Both a runtime constant object and a type. |
+| API envelope and `ApiErrorCode` | V2 | `{ success, data }` / `{ success: false, error }` and the stable error codes |
+| Auth contracts | V2 | `UserProfile`, `AuthTokens`, `AuthResult`, login/register/refresh requests |
+| Job vocabularies | Phase 2 | `JobStatus`, `JobPriority`, `JobAction`, `JobEventType` (constant objects and types) |
+| Job contracts | Phase 2 | `JobSummary`, `JobDetail`, `JobPage`, `JobHistoryEntry`, `UserSummary`, `WorkerSummary`, create/update/assign/cancel requests |
+
+The API checks at compile time that its Prisma enums and error codes match these vocabularies
+exactly (`src/users/role.ts`, `src/jobs/job-enums.ts`, `src/common/errors/error-codes.ts`).
 
 ## Rules
 
@@ -25,7 +32,8 @@ and the API (`apps/api`) both use them.
 
 ## Consumption
 
-For now the package is consumed as TypeScript source (`main`/`types` point to `src/index.ts`).
-Metro (React Native) handles that directly. When the NestJS API starts using it in Version 3,
-we will decide between compiling the package with `tsc` and letting the API's build include
-it. The decision goes in `docs/technology-decisions.md`.
+The package is consumed as TypeScript source (`main`/`types` point to `src/index.ts`). Metro
+(React Native) bundles it directly. The NestJS API uses **types only** (`import type`), so the
+compiled API never loads it at runtime and no build step is needed. The first runtime import on
+the API side (for example the shared state machine in `@fieldops/shared`, Phase 3) must decide
+how the package is built; see `docs/technology-decisions.md`.

@@ -1,5 +1,10 @@
 # Roadmap
 
+> **Superseded as the planning document.** The project is now managed in six phases: see
+> [master-development-plan.md](master-development-plan.md) and the current state in
+> [phase-status.md](phase-status.md) (which maps these versions to phases). This file keeps
+> the version breakdown and the completion checklists of V0–V2 (Phase 1) as history.
+
 FieldOps is built in small, complete versions. Each version has a focused scope and does
 **not** implement features from later versions.
 

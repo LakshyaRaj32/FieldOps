@@ -3,8 +3,9 @@
 The FieldOps backend: a **NestJS 12 modular monolith** in TypeScript (ESM), backed by
 **PostgreSQL** through **Prisma 7**.
 
-**Status:** Version 2. Backend foundation, authentication and sessions. Redis, BullMQ and
-WebSockets arrive in later versions ([roadmap](../../docs/roadmap.md)).
+**Status:** Phase 2 (Core Product). Backend foundation, authentication and sessions (Phase 1),
+plus jobs: model, assignment, state machine, history and authorization (Phase 2). Redis,
+BullMQ and WebSockets arrive in later phases ([phase status](../../docs/phase-status.md)).
 
 ## Quick start
 
@@ -27,6 +28,12 @@ PostgreSQL setup, tests, the phone connection and staging preparation:
 | `POST` | `/api/v1/auth/logout` | Bearer |
 | `GET` | `/api/v1/auth/me` | Bearer |
 | `GET` | `/api/v1/users` | Bearer, `ADMIN` |
+| `GET` | `/api/v1/users/workers` | Bearer, `MANAGER`/`ADMIN` |
+| `POST` | `/api/v1/jobs` | Bearer, `MANAGER`/`ADMIN` |
+| `GET` | `/api/v1/jobs`, `/api/v1/jobs/:id` | Bearer (workers: own jobs only) |
+| `PATCH`, `DELETE` | `/api/v1/jobs/:id` | Bearer, `MANAGER`/`ADMIN` |
+| `POST` | `/api/v1/jobs/:id/assign`, `/cancel` | Bearer, `MANAGER`/`ADMIN` |
+| `POST` | `/api/v1/jobs/:id/start`, `/complete` | Bearer, the assigned `WORKER` |
 | `GET` | `/health/live`, `/health/ready` | public |
 
 ## Source layout
@@ -34,7 +41,7 @@ PostgreSQL setup, tests, the phone connection and staging preparation:
 ```text
 apps/api/
 ├── prisma/
-│   ├── schema.prisma            users, sessions, Role, SessionRevocationReason
+│   ├── schema.prisma            users, sessions, jobs, job_checklist_items, job_events
 │   └── migrations/              committed SQL migrations
 ├── prisma.config.ts             Prisma 7 CLI config (schema, migrations, DATABASE_URL)
 ├── scripts/set-role.mjs         operator tool: grant a role by email
@@ -63,6 +70,7 @@ apps/api/
 │   │   ├── sessions.service.ts  sessions table (create, rotate, revoke)
 │   │   ├── dto/  guards/  strategies/  types/
 │   ├── users/                   users table, profile DTO, admin list, Role
+│   ├── jobs/                    jobs module: domain/ (state machine, policy), data/ (repository), DTOs
 │   ├── health/                  liveness and readiness
 │   └── generated/prisma/        generated client (gitignored)
 └── test/                        E2E tests (Vitest + Supertest, real PostgreSQL)

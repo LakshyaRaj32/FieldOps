@@ -1,9 +1,10 @@
 # Mobile Architecture
 
-> Status: **Versions 1 and 2 implemented** (foundation: project, navigation, state,
-> connectivity, API layer, environments, UI foundation, error handling; V2: real
-> authentication, secure token storage, session restore and token refresh, see
-> [authentication.md](authentication.md#8-mobile-app)). Later layers arrive in V5 (SQLite), V6 (sync), V7 (Kotlin location), V8 (realtime), V9 (push and media) and V14
+> Status: **Phase 1 and Phase 2 implemented** (Phase 1 / V1–V2: project, navigation, state,
+> connectivity, API layer, environments, UI foundation, error handling, real authentication,
+> secure token storage, session restore and token refresh, see
+> [authentication.md](authentication.md#8-mobile-app); Phase 2: the jobs feature, see
+> [Jobs (Phase 2)](#jobs-phase-2)). Later layers arrive in V5 (SQLite), V6 (sync), V7 (Kotlin location), V8 (realtime), V9 (push and media) and V14
 > (performance). How to run and develop the app: [mobile-development.md](mobile-development.md).
 
 ## 1. Goals
@@ -48,12 +49,12 @@ apps/mobile/src/
 │   └── providers/              AppProviders (safe area, Redux, theme, error boundary), AppServices
 ├── components/
 │   ├── ui/                     Primitives: AppText, Button, Card, Badge, Screen, SegmentedControl, TextField
-│   └── common/                 App-aware composites: Loading/Error/Empty states, ErrorBoundary, ConnectivityBanner
+│   └── common/                 App-aware composites: Loading/Error/Empty states, InfoRow, ErrorBoundary, ConnectivityBanner
 ├── features/                   Vertical slices; each owns its screens and feature-local components
 │   ├── auth/                   Login, Register, auth endpoints, session thunks, form validation
 │   ├── dashboard/              Dashboard tab
-│   ├── jobs/                   Jobs tab (placeholder until V4)
-│   ├── notifications/          Notifications tab (placeholder until V9)
+│   ├── jobs/                   Jobs stack: list, details, create/edit, assign; job API, rules, components
+│   ├── notifications/          Notifications tab (placeholder until Phase 4)
 │   └── profile/                Account, theme preference, diagnostics
 ├── hooks/                      Cross-feature hooks (useConnectivity)
 ├── services/                   Infrastructure wrappers; the only code allowed to touch these libraries
@@ -99,7 +100,7 @@ repositories).
 | # | Kind | Owner | Examples | Must not | V1 status |
 | --- | --- | --- | --- | --- | --- |
 | 1 | UI state | Component state; Redux slices when shared across screens | Form inputs, open sheets, selected filter | Hold domain entities as truth | Component state only |
-| 2 | Server state (online-only) | RTK Query | Manager dashboard, worker list, admin screens | Be used for offline-critical data | Base API + health check |
+| 2 | Server state (online-only) | RTK Query | Manager dashboard, worker list, admin screens | Be used for offline-critical data | Base API + health check; Phase 2 jobs (interim, see [Jobs](#jobs-phase-2)) |
 | 3 | Persistent local application data | SQLite | Assigned jobs, job events, attachment metadata, messages | Be mirrored wholesale into Redux | V5 |
 | 4 | Offline mutations | SQLite outbox (same DB, same transaction as the domain write) | `job.complete`, `job.note.add` | Live anywhere in-memory-only | V5–V6 |
 | 5 | Synchronization state | SQLite (truth); Redux mirror for display | Cursor, pending count, failures | Be lost on restart | V6 |
@@ -196,22 +197,29 @@ RootNavigator (native stack, NavigationContainer themed from the app theme)
 │   └── Login
 └── App    (mounted while signed in)   → AppNavigator (bottom tabs)
     ├── Dashboard
-    ├── Jobs
+    ├── Jobs      → JobsNavigator (native stack, Phase 2)
+    │   ├── JobList        "My jobs" for workers, "Jobs" for managers
+    │   ├── JobDetail
+    │   ├── JobForm        create / edit (managers)
+    │   └── AssignWorker   (managers)
     ├── Notifications
     └── Profile
 ```
 
 - Exactly one of `Auth` or `App` is mounted, chosen from session state. Signing out unmounts
   every authenticated screen, so back navigation cannot return to it.
-- Both navigators use `screenLayout` to render the connectivity banner below the header on
-  every screen.
+- Navigators use `screenLayout` to render the connectivity banner below the header on every
+  screen. The Jobs tab hides its own header and plain-wraps its stack, whose screens get the
+  banner below the stack header instead.
 - Param lists are typed (`app/navigation/types.ts`) and registered globally, so
   `useNavigation()` is type-checked.
 - `AuthNavigator` has Login and Register (V2). While the session is `restoring`, the root
   renders a loading screen instead of either navigator, so the sign-in screen never flashes
   for a signed-in user. Password reset is future work.
 
-**Planned evolution (V4+):** role-specific tabs, for example:
+**Phase 2 kept one tab set for every role.** Role differences live inside the screens
+(list title, assignee shown, "New job") and, above all, in the server's `allowedActions`.
+**Planned evolution:** role-specific tabs once there is more role-specific content, for example:
 
 ```text
 WorkerTabs  (WORKER)            Today / Jobs → JobDetail → Capture, Messages, Profile
@@ -219,6 +227,34 @@ ManagerTabs (MANAGER | ADMIN)   Dashboard, Jobs → JobDetail → Assign, Map, M
 ```
 
 Client-side role routing is **for UX only**. The server authorizes every operation.
+
+## Jobs (Phase 2)
+
+`features/jobs/`:
+
+```text
+jobs/
+├── api/jobsApi.ts        RTK Query endpoints (list = infinite query with cursors, details, commands, workers)
+├── api/contracts.ts      Runtime checks of every job payload before it enters the cache
+├── presentation.ts       Labels, badge tones, schedule formatting, list views, job commands
+├── jobForm.ts            Manager form: validation mirroring the API, create/update requests
+├── components/           JobCard, JobStatusBadge, JobPriorityBadge
+└── screens/              JobsScreen (list), JobDetailScreen, JobFormScreen, AssignWorkerScreen
+```
+
+- **The server decides what a user may do.** Every job carries `allowedActions`;
+  `jobCommands()` turns exactly those into buttons ("Start job" for the assigned worker on an
+  assigned job, "Complete job" once in progress; assign/edit/cancel/delete for managers). The
+  app makes no role or status decision of its own, so it can never offer an action the server
+  would reject.
+- **Every command invalidates the job and the lists, even when it fails.** A
+  `VERSION_CONFLICT` or `INVALID_STATUS_TRANSITION` means the screen shows a stale job; the
+  refetch brings it up to date and the app explains what happened.
+- **Responses are validated** (`queryFn` + guards); a malformed body becomes a `parse` error,
+  shown by the normal error state.
+- **Interim data source.** Phase 2 reads jobs online through RTK Query. Screens depend only on
+  the hooks exported from `jobsApi.ts`; Phase 3 moves the worker's jobs to SQLite (with the
+  outbox for start/complete) behind the same feature API.
 
 ## 9. Native modules (Kotlin, V7+)
 

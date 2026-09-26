@@ -1,6 +1,7 @@
 # API Conventions
 
-> Status: **Version 2.** Applies to every endpoint of the FieldOps API.
+> Status: **Phase 2 (Core Product).** Applies to every endpoint of the FieldOps API. Jobs were
+> added in Phase 2; see [Jobs](#jobs).
 
 ## Base URL and versioning
 
@@ -93,12 +94,78 @@ readable message, the request ID) is all present.
 | `NOT_FOUND` | 404 | Unknown route or resource |
 | `EMAIL_ALREADY_REGISTERED` | 409 | Registration with an existing email |
 | `CONFLICT` | 409 | Generic conflict |
+| `INVALID_STATUS_TRANSITION` | 409 | The job's status does not allow the action (for example completing a job that was never started) |
+| `JOB_NOT_EDITABLE` | 409 | The job cannot be edited or deleted in its status (closed job, started checklist, non-pending delete) |
+| `VERSION_CONFLICT` | 409 | The job changed since the client read it: refetch and retry |
+| `INVALID_ASSIGNEE` | 422 | The worker to assign does not exist, is disabled or is not a `WORKER` |
 | `PAYLOAD_TOO_LARGE` | 413 | Body over the limit (100 kB) |
 | `INTERNAL_ERROR` | 500 | Unexpected failure; see server logs with the request ID |
 | `SERVICE_UNAVAILABLE` | 503 | A dependency (the database) is down; readiness probe |
 
 The runtime list (`apps/api/src/common/errors/error-codes.ts`) is checked at compile time
 against the shared union type, so the two cannot drift.
+
+## Jobs
+
+All job endpoints require a bearer token. Authorization is decided on the server for every
+request by the job policy (`apps/api/src/jobs/domain/job.policy.ts`).
+
+| Method | Path | Who | Result |
+| --- | --- | --- | --- |
+| `POST` | `/api/v1/jobs` | MANAGER, ADMIN | `201` the new job (`PENDING`) |
+| `GET` | `/api/v1/jobs` | everyone | `200` a page `{ items, nextCursor }` |
+| `GET` | `/api/v1/jobs/:id` | everyone who may see the job | `200` details, checklist, history |
+| `PATCH` | `/api/v1/jobs/:id` | MANAGER, ADMIN | `200` the updated job |
+| `DELETE` | `/api/v1/jobs/:id` | MANAGER, ADMIN | `204` (only `PENDING` jobs) |
+| `POST` | `/api/v1/jobs/:id/assign` | MANAGER, ADMIN | `200` the job, `ASSIGNED` (body `{ workerId }`) |
+| `POST` | `/api/v1/jobs/:id/start` | the assigned WORKER | `200` the job, `IN_PROGRESS` |
+| `POST` | `/api/v1/jobs/:id/complete` | the assigned WORKER | `200` the job, `COMPLETED` |
+| `POST` | `/api/v1/jobs/:id/cancel` | MANAGER, ADMIN | `200` the job, `CANCELLED` (optional body `{ reason }`) |
+| `GET` | `/api/v1/users/workers` | MANAGER, ADMIN | `200` active workers to assign |
+
+**Status lifecycle.** Status never changes through `PATCH`; only the action endpoints move it,
+through the job state machine:
+
+```text
+PENDING ──assign──▶ ASSIGNED ──start──▶ IN_PROGRESS ──complete──▶ COMPLETED
+   │                  │  ▲                  │
+   │                  └──┘ reassign         │
+   └──────cancel──────┴────────cancel───────┴──▶ CANCELLED
+```
+
+- Reassignment is possible only before the worker starts.
+- `COMPLETED` and `CANCELLED` are final. Reopening is not supported.
+- **Repeating a command is safe.** `start` on a job that is already `IN_PROGRESS` (a double tap,
+  or a retry after a lost response) returns `200` with the job and changes nothing. The same
+  applies to `complete`, `cancel`, and `assign` with the current assignee. A command that would
+  move the job anywhere else is `409 INVALID_STATUS_TRANSITION`.
+
+**Visibility.** Managers and admins see every job (one organization until tenancy exists).
+Workers see only the jobs currently assigned to them: another worker's job, or an unassigned
+one, answers `404 NOT_FOUND`, exactly as a job that does not exist. `GET /jobs` is filtered to
+the caller's own jobs for workers; a worker asking for `assignedWorkerId` of someone else gets
+`403`. Role refusals (a worker assigning, a manager starting) are `403 FORBIDDEN`.
+
+**`allowedActions`.** Every job in a response lists what the caller may do with it right now
+(`start`, `complete`, `assign`, `edit`, `cancel`, `delete`), computed from the caller's role,
+their relationship to the job and its status. Clients show exactly these actions.
+
+**Editing.** `PATCH` takes the `version` the client read, plus any of `title`, `description`,
+`customerName`, `address`, `location`, `scheduledAt`, `priority`, `notes`, `checklist`.
+`null` clears the optional ones (`description`, `location`, `notes`). A different current
+version answers `409 VERSION_CONFLICT`. Closed jobs are read-only; the checklist cannot change
+once the job has started (`409 JOB_NOT_EDITABLE`).
+
+**Listing.** `GET /api/v1/jobs?status=ASSIGNED,IN_PROGRESS&assignedWorkerId=…&order=asc&limit=20&cursor=…`
+
+- Ordered by `scheduledAt`, then creation (`order=desc` for latest first).
+- `limit` 1–100 (default 20). Pass the page's `nextCursor` as `cursor` for the next page; it is
+  `null` on the last page. Cursors are opaque; a forged one is `400 VALIDATION_ERROR`.
+
+**Validation.** `scheduledAt` must be an ISO 8601 date-time **with** a time zone (`Z` or
+`+05:30`), so the instant does not depend on the server's zone. Text fields are trimmed and
+length-limited to the database column sizes. Unknown fields (including `status`,
+`assignedWorkerId` and `version` on create) are rejected.
 
 ## Request correlation
 
@@ -138,5 +205,6 @@ Import [`docs/postman/FieldOps-API.postman_collection.json`](postman/FieldOps-AP
 - The collection uses bearer auth with `{{accessToken}}` by default; public requests override
   it with "No Auth".
 
-The Postman collection is for manual exploration. The automated regression suite is the E2E
+The collection covers authentication. Job endpoints are best explored in Swagger (tag
+**jobs**). The Postman collection is for manual exploration. The automated regression suite is the E2E
 tests (`npm run api:test:e2e`).

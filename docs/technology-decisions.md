@@ -403,6 +403,21 @@ interaction. `react-native-sensitive-info` 6 (Nitro-based and more recently rele
 alternative. It was not chosen because its generated Nitro code must match the Nitro runtime
 version that MMKV already pins, which couples two native dependencies' upgrade schedules.
 
+## Jobs (Phase 2)
+
+No new dependencies were added in Phase 2. The decisions it made:
+
+| Decision | Chosen | Alternatives | Why |
+| --- | --- | --- | --- |
+| Where the job state machine lives | `apps/api/src/jobs/domain/job-state-machine.ts` (pure TypeScript) | `@fieldops/shared` now | The API consumes `@fieldops/types` for types only; a runtime-shared package needs a build decision (compile it, or let each app bundle it). Phase 2 does not need the rules on the device, because the server computes `allowedActions`. The file has no framework or I/O dependencies (only the status vocabulary), so it moves to `@fieldops/shared` with just its import changed when Phase 3 needs offline transitions |
+| How the app knows which actions to offer | Server-computed `allowedActions` on every job | The app re-implements role and status rules | One source of authorization truth. The app cannot drift from the server |
+| Assignment model | Current assignee on `jobs.assigned_worker_id`; history in `job_events` | `job_assignments` join table (the architecture's conceptual model) | One worker per job is all the workflow needs; history is still complete. A join table can come with crews |
+| Concurrency | Integer `version` compare-and-set on every change | Row locks (`SELECT … FOR UPDATE`), last write wins | Correctness from the database with no lock held across a request; the same `version` becomes the sync `baseVersion` in Phase 3 |
+| Repeated commands | Idempotent by target state (start on a started job returns it unchanged) | `409` on every repeat; `Idempotency-Key` storage | Safe retries and double taps now, with no extra storage. Full `Idempotency-Key` support stays in Phase 5 |
+| List pagination | Keyset cursor on `(scheduled_at, id)`, opaque to clients | Offset pagination | Stable under inserts and deletes, index-backed, and follows the API convention for growing lists |
+| Mobile job data | RTK Query (online) behind feature hooks | SQLite now | SQLite and the outbox are Phase 3 scope. The hooks are the seam Phase 3 replaces |
+| Mobile schedule input | Date and 24-hour time text fields | `@react-native-community/datetimepicker` | Avoids a native dependency and rebuild for one form; revisit with Phase 6 UX polish |
+
 ## Pending decisions
 
 These are deliberately deferred to the version where the information to decide exists.
@@ -430,3 +445,4 @@ These are deliberately deferred to the version where the information to decide e
 | Backend validation library | V2 | class-validator DTOs (Nest-native, feeds OpenAPI). Shared *types* in `@fieldops/types`; Zod stays an option for runtime-shared schemas (pending above) |
 | Secure token storage on the device | V2 | react-native-keychain 10 (see [Backend libraries (V2)](#backend-libraries-v2)) |
 | Local PostgreSQL for development | V2 | Native PostgreSQL 18 install; Docker Compose deferred by the repository owner |
+| Roadmap structure | Phase 2 | Six phases ([master-development-plan.md](master-development-plan.md)); the V0–V19 list remains the internal breakdown ([phase-status.md](phase-status.md)) |

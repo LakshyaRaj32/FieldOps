@@ -1,6 +1,7 @@
 # Database
 
-> Status: **Version 2.** PostgreSQL 18 through Prisma 7. Two tables: `users` and `sessions`.
+> Status: **Phase 2 (Core Product).** PostgreSQL 18 through Prisma 7. Tables: `users`,
+> `sessions` (Phase 1), `jobs`, `job_checklist_items`, `job_events` (Phase 2).
 
 The schema lives in [`apps/api/prisma/schema.prisma`](../apps/api/prisma/schema.prisma), and the
 committed migrations in `apps/api/prisma/migrations/`.
@@ -50,6 +51,66 @@ Constraint `users_email_normalized_check`: `email = lower(btrim(email))`.
 
 How these columns are used: [authentication.md](authentication.md#5-sessions).
 
+### `jobs`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` PK | UUIDv7 |
+| `title` | `varchar(200)` NOT NULL | Non-blank (check) |
+| `description` | `varchar(5000)` NULL | |
+| `customer_name` | `varchar(200)` NOT NULL | Non-blank. A plain name; a customer entity can come later |
+| `address` | `varchar(500)` NOT NULL | Non-blank |
+| `latitude`, `longitude` | `double precision` NULL | WGS 84; both or neither, in range (check) |
+| `scheduled_at` | `timestamptz(3)` NOT NULL | The appointment; the list sort key |
+| `priority` | `"JobPriority"` NOT NULL, default `NORMAL` | `LOW`, `NORMAL`, `HIGH`, `URGENT` |
+| `status` | `"JobStatus"` NOT NULL, default `PENDING` | Changed only by the state machine's commands |
+| `assigned_worker_id` | `uuid` NULL, FK → `users.id` **ON DELETE RESTRICT** | Current assignee (a WORKER) |
+| `notes` | `varchar(5000)` NULL | Instructions from the manager |
+| `cancellation_reason` | `varchar(500)` NULL | |
+| `created_by_id` | `uuid` NOT NULL, FK → `users.id` **ON DELETE RESTRICT** | |
+| `version` | `integer` NOT NULL, default 1 | Optimistic concurrency: +1 on every change (≥ 1, check) |
+| `started_at`, `completed_at`, `cancelled_at` | `timestamptz(3)` NULL | Set by the transitions |
+| `created_at`, `updated_at` | `timestamptz(3)` NOT NULL | |
+
+Hand-written constraints (end of migration `20260926162210_jobs`):
+
+- `jobs_assignment_check`: a `PENDING` job has no worker; `ASSIGNED`, `IN_PROGRESS` and
+  `COMPLETED` jobs have one; `CANCELLED` keeps whatever it had.
+- `jobs_lifecycle_timestamps_check`: `IN_PROGRESS`/`COMPLETED` imply `started_at`,
+  `COMPLETED` implies `completed_at`, `CANCELLED` implies `cancelled_at`.
+- `jobs_location_check`, `jobs_required_text_check`, `jobs_version_check`.
+
+Users are never hard-deleted (they are deactivated), so the user foreign keys are `RESTRICT`:
+deleting a user who has jobs or history fails instead of silently rewriting it.
+
+### `job_checklist_items`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` PK | UUIDv7 |
+| `job_id` | `uuid` NOT NULL, FK → `jobs.id` **ON DELETE CASCADE** | |
+| `position` | `integer` NOT NULL | 0-based order, unique per job (`job_id, position`) |
+| `label` | `varchar(200)` NOT NULL | Non-blank |
+| `created_at` | `timestamptz(3)` NOT NULL | |
+
+Items are defined by the manager. Per-item completion (`completed_at`, `completed_by_id`) is added
+with checklist execution in a later phase.
+
+### `job_events`
+
+Append-only history of a job, written in the same transaction as the change it records.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` PK | UUIDv7 |
+| `job_id` | `uuid` NOT NULL, FK → `jobs.id` **ON DELETE CASCADE** | Jobs can be deleted only while `PENDING` |
+| `type` | `"JobEventType"` NOT NULL | `CREATED`, `ASSIGNED`, `STARTED`, `COMPLETED`, `CANCELLED` |
+| `from_status` | `"JobStatus"` NULL | NULL for `CREATED` |
+| `to_status` | `"JobStatus"` NOT NULL | |
+| `actor_id` | `uuid` NOT NULL, FK → `users.id` RESTRICT | Who did it |
+| `assignee_id` | `uuid` NULL, FK → `users.id` RESTRICT | `ASSIGNED` events |
+| `created_at` | `timestamptz(3)` NOT NULL | Server time. Offline sync (Phase 3) adds the device's `occurred_at` |
+
 ## Indexing decisions
 
 Every index answers a query the code actually runs. Indexes cost write time and storage, so
@@ -63,7 +124,15 @@ none are added "just in case".
 | `sessions_user_id_idx` (`user_id`) | Revoke all sessions of a user (logout-all, deactivation); cascade deletes; future session lists | **Added.** PostgreSQL does not index foreign keys automatically, and without it those operations scan the whole table |
 | `refresh_token_hash` | Never queried by itself: the session is found by ID, and the hash is compared in the rotation `UPDATE ... WHERE id = ? AND refresh_token_hash = ?`, which uses the primary key | **Not indexed.** Also not unique: uniqueness would add a write-time index for no read benefit |
 | `expires_at` / `revoked_at` | A future cleanup job deleting expired sessions (V12) | **Not yet.** Add a partial or BRIN index when that job exists and its query is known |
-| `users.role`, `users.is_active` | No query filters on them yet | **Not indexed.** Low cardinality; revisit with admin search |
+| `users.role`, `users.is_active` | `GET /users/workers` filters active workers | **Not indexed.** Low cardinality and a small table; revisit with admin search or tenancy |
+| `jobs_assigned_worker_id_scheduled_at_idx` | A worker's job list: `WHERE assigned_worker_id = ? ORDER BY scheduled_at, id` | **Added.** Also indexes the foreign key |
+| `jobs_status_scheduled_at_idx` | Manager lists filtered by status, in schedule order | **Added** |
+| `jobs_scheduled_at_id_idx` | Unfiltered manager list and keyset pagination on `(scheduled_at, id)` | **Added** |
+| `jobs.created_by_id` | Not queried; only checked by PostgreSQL when a user row is deleted, which does not happen | **Not indexed** |
+| `jobs.created_at` | "Newest first" is not a query yet; UUIDv7 IDs already sort by creation | **Not indexed** |
+| `job_checklist_items_job_id_position_key` | Load a job's checklist in order; one item per position | **Added** (unique) |
+| `job_events_job_id_created_at_idx` | A job's history in order (details screen) | **Added** |
+| `job_events.actor_id`, `assignee_id` | Not queried yet (a per-user activity view would) | **Not indexed** |
 
 ## Migrations
 

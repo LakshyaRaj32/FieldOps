@@ -83,9 +83,12 @@ installs exactly one version of each for every workspace (see
 ## Git workflow
 
 - Default branch: `main`. It is always green.
-- Version work: `v<N>/<short-description>` (for example `v1/react-native-foundation`).
+- Phase work: `phase-<N>/<short-description>` (for example `phase-2/core-product`). Former
+  version branches used `v<N>/<short-description>`.
 - Commits follow Conventional Commits (`feat(mobile): add role-based navigator`).
-- Every completed version is merged, then tagged (`v0.1.0` for Version 1, and so on).
+- Every completed phase is tagged with its checkpoint name (`phase-2-core-product`, see
+  [master-development-plan.md](master-development-plan.md#7-git-strategy)). Former versions
+  were tagged `v0.<N>.0`.
 
 ## Windows notes
 
@@ -99,6 +102,14 @@ The primary development machine runs Windows. To avoid common problems:
 - **Short project path.** Keep the repository near a drive root (it lives at
   `L:\Projects\FieldOps`) to stay well within Gradle and CMake path limits. The native C++
   builds (Reanimated, MMKV, Nitro) are the most sensitive to long paths.
+- **Path casing and workspace links.** npm links the workspaces into `node_modules/@fieldops/`
+  as junctions that record the path as it was typed. Windows ignores case, Metro does not: if
+  the repository was installed as `L:\Projects\FieldOps` and is now opened as
+  `L:\projects\FieldOps` (the real name on disk), Metro reports
+  `Unable to resolve module @fieldops/types`. Check with
+  `Get-ChildItem node_modules\@fieldops | Select Name, Target` and recreate any mismatched link
+  (`cmd /c rmdir <link>` removes only the link, then `cmd /c mklink /J <link> <target>`), or
+  delete `node_modules` and run `npm install` from the correctly-cased path.
 - **Android emulator networking.** The emulator reaches the host machine at `10.0.2.2`.
 - **Shells.** Scripts in `package.json` must work in both PowerShell and POSIX shells. Avoid
   shell-specific syntax.

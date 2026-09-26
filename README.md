@@ -12,11 +12,24 @@ assign and monitor jobs and workers in real time.
 
 | | |
 | --- | --- |
-| **Current version** | **Version 2: backend foundation and authentication** |
-| Completed | V0: architecture and repository foundation · V1: mobile foundation · V2: backend and auth |
-| Next | Version 3: organizations and user administration (not started) |
+| **Current phase** | **Phase 2: Core Product** (implemented; physical-device verification pending) |
+| Completed | Phase 1: Foundation (V0 architecture, V1 mobile foundation, V2 backend and auth) |
+| Next | Phase 3: Offline-First (not started) |
 
-Version 2 delivers the first working end-to-end stack:
+The project is managed in six phases: [docs/master-development-plan.md](docs/master-development-plan.md),
+current state in [docs/phase-status.md](docs/phase-status.md).
+
+**Phase 2** turns the foundation into a field-work application: managers create jobs, assign
+workers and monitor status; workers see their jobs, start them and complete them.
+
+- a `jobs` module with an explicit state machine (`PENDING → ASSIGNED → IN_PROGRESS →
+  COMPLETED`, cancellation, no reopening), append-only job history and optimistic concurrency;
+- server-side authorization on every job operation (workers only ever see their own jobs), with
+  the allowed actions for each job sent to the app;
+- on the phone: job list, job details with Start/Complete, and the manager's create, edit and
+  assign screens; see [docs/api.md](docs/api.md#jobs).
+
+**Phase 1** delivered the first working end-to-end stack:
 
 ```text
 React Native (Android) ──HTTP──▶ NestJS API ──Prisma──▶ PostgreSQL
@@ -132,7 +145,9 @@ npm run mobile:start
 npm run mobile:android
 ```
 
-The app appears as **FieldOps Dev**. Create an account or sign in. The API URL for each build type is set in `apps/mobile/.env.*` files, so switching
+The app appears as **FieldOps Dev**. Create an account or sign in. Self-registration creates
+workers; to try the manager flow, grant a role with
+`npm run user:set-role -w @fieldops/api -- <email> MANAGER`. The API URL for each build type is set in `apps/mobile/.env.*` files, so switching
 from the local API to staging needs no code changes.
 
 Building APKs, API environments, testing and troubleshooting:
@@ -158,7 +173,9 @@ Building APKs, API environments, testing and troubleshooting:
 | [devops.md](docs/devops.md) | Environments, containers, CI/CD, releases, observability, scaling path |
 | [ai-architecture.md](docs/ai-architecture.md) | Controlled AI tools, safety, evaluation |
 | [development.md](docs/development.md) | Local setup, workspaces, git workflow, Windows notes |
-| [roadmap.md](docs/roadmap.md) | Versions 0–19 and the completion checklists |
+| [master-development-plan.md](docs/master-development-plan.md) | The six-phase plan |
+| [phase-status.md](docs/phase-status.md) | Current phase, what was built, decisions, known issues, verification |
+| [roadmap.md](docs/roadmap.md) | The former V0–V19 breakdown and the V0–V2 checklists |
 
 ## Roles
 

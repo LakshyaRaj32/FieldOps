@@ -1,9 +1,10 @@
 # Backend Architecture
 
-> Status: **implemented foundation (Version 2).** The NestJS application exists in `apps/api`
-> with configuration, Prisma/PostgreSQL, the HTTP pipeline, health checks, `auth` and `users`
-> (see [backend-development.md](backend-development.md) and
-> [authentication.md](authentication.md)). The rest of this document is the design that later
+> Status: **implemented through Phase 2 (Core Product).** The NestJS application exists in
+> `apps/api` with configuration, Prisma/PostgreSQL, the HTTP pipeline, health checks, `auth`,
+> `users` (Phase 1) and `jobs` (Phase 2; see [api.md](api.md#jobs) and
+> [database.md](database.md)). Setup: [backend-development.md](backend-development.md) and
+> [authentication.md](authentication.md). The rest of this document is the design that later
 > versions follow. Where V2 deliberately deviated from the V0 design, the text says so.
 > Modules are added in the versions listed below.
 
@@ -43,10 +44,10 @@ open WebSocket connections.
 | --- | --- | --- |
 | `common` | Config validation, error mapping (error envelope), access logging, request IDs, base guards, Prisma service, health checks | V2 |
 | `auth` | Login, token issuance and rotation, logout, session and device binding, password hashing | V2 |
-| `users` | User profiles, role assignment (admin), user lifecycle | V2 (table, profile, admin list), grows with V3 |
+| `users` | User profiles, role assignment (admin), user lifecycle | V2 (table, profile, admin list); Phase 2 added the assignable-workers list |
 | `organizations` | Tenancy, org settings | V3 |
-| `jobs` | Jobs, assignments, job state machine, job events | V4 |
-| `audit` | Append-only audit log writer and query API (admin) | V4 (writer), grows over time |
+| `jobs` | Jobs, assignment, job state machine, job history (`job_events`), job policy | **Phase 2 (implemented)** |
+| `audit` | Append-only audit log writer and query API (admin) | Phase 5 (job-related history already lives in `job_events`) |
 | `sync` | Push/pull endpoints, `processed_mutations`, `change_log`, visibility filtering | V6 |
 | `locations` | Batched location ingestion, latest-position queries, retention | V7 |
 | `messaging` | Conversations, messages, WebSocket delivery | V8 |
@@ -70,7 +71,7 @@ jobs/
 ├── jobs.controller.ts          Transport: HTTP routing, DTO binding. No business logic.
 ├── jobs.service.ts             Application layer: use cases, transactions, authorization calls
 ├── domain/
-│   ├── job-state-machine.ts    Pure logic: allowed transitions (shared with mobile via @fieldops/shared)
+│   ├── job-state-machine.ts    Pure logic: allowed transitions (moves to @fieldops/shared in Phase 3)
 │   └── job.policy.ts           Pure authorization policies (can user X do Y to job Z?)
 ├── data/
 │   └── jobs.repository.ts      Prisma queries owned by this module
@@ -167,9 +168,17 @@ Implemented; the full description is in [authentication.md](authentication.md).
   a forged one without keeping a token history.
 - Every authenticated request also checks its session in the database, so logout, revocation
   and deactivation take effect immediately. Redis can cache this lookup (V10+).
-- Login, registration and refresh are rate-limited in V11 and audited from V4.
+- Login, registration and refresh are rate-limited in V11 and audited with the audit log
+  (Phase 5).
 
 ## 9. Authorization
+
+Implemented for jobs in Phase 2 (`src/jobs/domain/job.policy.ts`): a permission table per role
+(`job:create`, `job:assign`, `job:work`, ...), the resource relationship (a worker and their
+assigned jobs), and `allowedActions` computed from both for every job response. `@Roles()` route
+gates are generated from the same table (`rolesWith('job:assign')`), so gate and service cannot
+disagree. The service checks in a fixed order: not visible → `404`, not permitted → `403`,
+wrong status → `409`.
 
 - **Roles → permissions** mapping in code (see [architecture.md](architecture.md#8-role-model)).
 - **Guards** check route-level permissions. **Policies** in each module's `domain/` check
