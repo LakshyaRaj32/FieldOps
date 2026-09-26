@@ -125,7 +125,11 @@ retries, concurrent edits, pagination and deletion rules.
 
 - API: `npm run api:build` succeeds; the compiled server starts and serves all job endpoints
   in its OpenAPI document.
-- Android: see the build entry in [Verification still required](#verification-still-required).
+- Android: the release JS bundle builds (`react-native bundle`), and the debug APK builds
+  (`gradlew assembleDebug`, arm64-v8a, 12 min on the development machine). The machine has
+  8 GB of RAM and earlier builds crashed the JVM for lack of memory; building one ABI with
+  `--no-daemon -Dorg.gradle.workers.max=2` succeeded. `npm run mobile:android` builds only the
+  connected device's ABI.
 - No staging deployment exists yet (CI/CD and staging are Phase 6).
 
 ### Verification still required
