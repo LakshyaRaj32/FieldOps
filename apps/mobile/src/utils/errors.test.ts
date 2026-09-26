@@ -1,4 +1,9 @@
-import { fromFetchBaseQueryError, isAppError, toAppError } from './errors';
+import {
+  fieldError,
+  fromFetchBaseQueryError,
+  isAppError,
+  toAppError,
+} from './errors';
 
 describe('fromFetchBaseQueryError', () => {
   it('maps connection failures to a network error', () => {
@@ -17,21 +22,67 @@ describe('fromFetchBaseQueryError', () => {
     ).toBe('timeout');
   });
 
-  it('uses RFC 9457 Problem Details from the server when present', () => {
-    const error = fromFetchBaseQueryError({
-      status: 409,
-      data: {
-        title: 'Conflict',
-        detail: 'Job is no longer assigned to you.',
-        code: 'JOB_REASSIGNED',
+  it('reads the API error envelope and uses app-owned copy for known codes', () => {
+    const error = fromFetchBaseQueryError(
+      {
+        status: 401,
+        data: {
+          success: false,
+          error: {
+            code: 'INVALID_CREDENTIALS',
+            message: 'Invalid email or password.',
+            requestId: 'server-req-1',
+          },
+        },
       },
-    });
+      'client-req-1',
+    );
     expect(error).toEqual({
       kind: 'http',
-      status: 409,
-      message: 'Job is no longer assigned to you.',
-      code: 'JOB_REASSIGNED',
+      status: 401,
+      code: 'INVALID_CREDENTIALS',
+      message: 'Incorrect email or password.',
+      requestId: 'server-req-1',
+      detail: 'Invalid email or password.',
     });
+  });
+
+  it('keeps validation details for showing next to form fields', () => {
+    const error = fromFetchBaseQueryError({
+      status: 400,
+      data: {
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Some fields are missing or invalid.',
+          details: [
+            { field: 'email', message: 'Enter a valid email address.' },
+            { field: 42, message: 'ignored: malformed' },
+          ],
+        },
+      },
+    });
+    expect(error.details).toEqual([
+      { field: 'email', message: 'Enter a valid email address.' },
+    ]);
+    expect(fieldError(error, 'email')).toBe('Enter a valid email address.');
+    expect(fieldError(error, 'password')).toBeUndefined();
+  });
+
+  it('never shows server text for server errors', () => {
+    const error = fromFetchBaseQueryError({
+      status: 500,
+      data: {
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'relation "users" does not exist',
+        },
+      },
+    });
+    expect(error.message).toBe(
+      'The server ran into a problem. Please try again shortly.',
+    );
   });
 
   it.each([

@@ -1,0 +1,28 @@
+import type { ApiErrorCode } from '@fieldops/types';
+
+/**
+ * Runtime values for the shared ApiErrorCode union. The `satisfies` clause fails compilation
+ * if this object and @fieldops/types drift apart (a code missing here, or an unknown one).
+ */
+export const ErrorCode = {
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  BAD_REQUEST: 'BAD_REQUEST',
+  UNAUTHENTICATED: 'UNAUTHENTICATED',
+  ACCESS_TOKEN_EXPIRED: 'ACCESS_TOKEN_EXPIRED',
+  ACCESS_TOKEN_INVALID: 'ACCESS_TOKEN_INVALID',
+  INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
+  ACCOUNT_DISABLED: 'ACCOUNT_DISABLED',
+  EMAIL_ALREADY_REGISTERED: 'EMAIL_ALREADY_REGISTERED',
+  REFRESH_TOKEN_INVALID: 'REFRESH_TOKEN_INVALID',
+  REFRESH_TOKEN_REUSED: 'REFRESH_TOKEN_REUSED',
+  SESSION_REVOKED: 'SESSION_REVOKED',
+  SESSION_EXPIRED: 'SESSION_EXPIRED',
+  FORBIDDEN: 'FORBIDDEN',
+  NOT_FOUND: 'NOT_FOUND',
+  CONFLICT: 'CONFLICT',
+  PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
+  INTERNAL_ERROR: 'INTERNAL_ERROR',
+  SERVICE_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
+} as const satisfies { readonly [Code in ApiErrorCode]: Code };
+
+export type { ApiErrorCode };

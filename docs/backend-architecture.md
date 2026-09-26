@@ -1,8 +1,11 @@
 # Backend Architecture
 
-> Status: **design (Version 0).** The NestJS application is generated in V3. Auth endpoints
-> arrive in V2 (see the sequencing note in [roadmap.md](roadmap.md)). Modules are added in
-> the versions listed below.
+> Status: **implemented foundation (Version 2).** The NestJS application exists in `apps/api`
+> with configuration, Prisma/PostgreSQL, the HTTP pipeline, health checks, `auth` and `users`
+> (see [backend-development.md](backend-development.md) and
+> [authentication.md](authentication.md)). The rest of this document is the design that later
+> versions follow. Where V2 deliberately deviated from the V0 design, the text says so.
+> Modules are added in the versions listed below.
 
 ## 1. Goals
 
@@ -38,9 +41,9 @@ open WebSocket connections.
 
 | Module | Responsibility | Version |
 | --- | --- | --- |
-| `common` | Config validation, error mapping (Problem Details), logging, request IDs, base guards, Prisma service, health checks | V3 (partly V2) |
+| `common` | Config validation, error mapping (error envelope), access logging, request IDs, base guards, Prisma service, health checks | V2 |
 | `auth` | Login, token issuance and rotation, logout, session and device binding, password hashing | V2 |
-| `users` | User profiles, role assignment (admin), user lifecycle | V2–V3 |
+| `users` | User profiles, role assignment (admin), user lifecycle | V2 (table, profile, admin list), grows with V3 |
 | `organizations` | Tenancy, org settings | V3 |
 | `jobs` | Jobs, assignments, job state machine, job events | V4 |
 | `audit` | Append-only audit log writer and query API (admin) | V4 (writer), grows over time |
@@ -58,8 +61,11 @@ time.
 
 ## 4. Inside a module
 
+Modules live directly under `src/` (`src/auth`, `src/users`; V2 dropped the planned
+`src/modules/` level because it added nesting without adding information).
+
 ```text
-modules/jobs/
+jobs/
 ├── jobs.module.ts
 ├── jobs.controller.ts          Transport: HTTP routing, DTO binding. No business logic.
 ├── jobs.service.ts             Application layer: use cases, transactions, authorization calls
@@ -91,7 +97,7 @@ modules/jobs/
 ```text
 request
   → request ID + structured logging (middleware)
-  → rate limiter (basic in V2, custom distributed in V11)
+  → rate limiter (custom distributed, V11; not present before)
   → AuthGuard           verify access token → attach principal { userId, orgId, role, sessionId }
   → PermissionsGuard    route-level permission check (e.g. job:assign)
   → ValidationPipe      runtime validation of body/query/params; unknown fields rejected
@@ -100,7 +106,8 @@ request
         → resource policy check (e.g. "is caller assigned to this job?")
         → transaction: domain logic + persistence + audit + outbox events
   → response serialization (explicit response DTOs; never return raw Prisma models)
-  → exception filter → RFC 9457 Problem Details on error
+  → response envelope { success: true, data }
+  → exception filter → error envelope { success: false, error: { code, message } }
 ```
 
 ## 6. API design
@@ -109,12 +116,14 @@ request
   actions (`POST /jobs/{id}/assign`) rather than overloading `PATCH`.
 - **OpenAPI** generated from code (`@nestjs/swagger`), served in non-production environments
   and exported as an artifact in CI.
-- **Validation.** Runtime schemas at the boundary. Contracts that the mobile app also uses live
-  in `@fieldops/shared` (the schema library decision is in V3; see
-  [technology-decisions.md](technology-decisions.md#pending-decisions)).
-- **Errors.** `application/problem+json` with `type`, `title`, `status`, `detail`, a stable
-  `code` (for example `JOB_REASSIGNED`) and `requestId`. Stack traces are never returned to
-  clients.
+- **Validation.** DTO classes validated by `class-validator` through a global
+  `ValidationPipe`, with unknown fields rejected. Contract *types* shared with the mobile app
+  live in `@fieldops/types`, and DTOs `implements` them, so drift fails compilation (V2
+  decision; see [technology-decisions.md](technology-decisions.md#backend-libraries-v2)).
+- **Errors.** The envelope `{ success: false, error: { code, message, details?, requestId } }`
+  with a stable `code` (for example `JOB_REASSIGNED`). Stack traces, database and framework
+  messages are never returned to clients. V2 chose this envelope over RFC 9457 Problem Details;
+  see [api.md](api.md).
 - **Pagination.** Cursor-based (`?cursor=&limit=`) for lists that can grow. Offset pagination
   is allowed only for small admin tables.
 - **Idempotency.** Critical non-sync commands accept an `Idempotency-Key` header. The key,
@@ -144,16 +153,21 @@ request
 
 ## 8. Authentication (V2)
 
+Implemented; the full description is in [authentication.md](authentication.md).
+
 - Email and password to start. **Argon2id** hashing. The design allows adding SSO/OIDC for
   organizations later.
-- **Access token:** a short-lived JWT (about 15 minutes) carrying `sub`, `org`, `role`, `sid`.
-  Asymmetric signing so keys can rotate.
-- **Refresh token:** an opaque random value, stored **hashed** and bound to a session and
-  device, rotated on every use, with **reuse detection**. Presenting an already-rotated token
-  revokes the whole session family.
-- Logout and admin revocation invalidate sessions immediately for refresh. Access tokens expire
-  quickly. A revocation check against Redis can be added for sensitive operations (V10+).
-- Login and refresh endpoints are rate-limited and audited.
+- **Access token:** a short-lived JWT (15 minutes) carrying `sub`, `role`, `sid` (`org` joins
+  with organizations in V3). **Deviation:** HS256 with a secret instead of asymmetric signing,
+  because the API is the only issuer and verifier for now. Revisit in V18.
+- **Refresh token:** a signed JWT naming its session plus a random `jti`, stored **hashed**
+  (SHA-256) on the session row, rotated on every use, with **reuse detection**. Presenting an
+  already-rotated token revokes the whole session. **Deviation:** a JWT rather than an opaque
+  value, so the session is found by primary key and a genuine old token can be told apart from
+  a forged one without keeping a token history.
+- Every authenticated request also checks its session in the database, so logout, revocation
+  and deactivation take effect immediately. Redis can cache this lookup (V10+).
+- Login, registration and refresh are rate-limited in V11 and audited from V4.
 
 ## 9. Authorization
 

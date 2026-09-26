@@ -1,0 +1,24 @@
+{
+  // FieldOps strictness baseline, plus what NestJS needs: Node ESM resolution (Nest 12 is
+  // ESM-only) and legacy decorators with metadata (constructor injection).
+  "extends": "@fieldops/config/tsconfig.base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "types": ["node", "vitest/globals"],
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    // DTO properties are assigned by class-transformer, not by constructors.
+    "strictPropertyInitialization": false,
+    "declaration": false,
+    "removeComments": true,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "rootDir": ".",
+    "incremental": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

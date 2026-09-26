@@ -5,9 +5,10 @@ import type {
 } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-/** Screens available before sign-in. Register and ForgotPassword join in Version 2 if needed. */
+/** Screens available before sign-in. */
 export type AuthStackParamList = {
   Login: undefined;
+  Register: undefined;
 };
 
 /** Main tabs after sign-in. */

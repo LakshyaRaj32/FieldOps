@@ -1,51 +1,85 @@
-# apps/api (reserved)
+# apps/api
 
-The FieldOps backend: a **NestJS modular monolith** written in TypeScript and backed by
-PostgreSQL (through Prisma) and Redis.
+The FieldOps backend: a **NestJS 12 modular monolith** in TypeScript (ESM), backed by
+**PostgreSQL** through **Prisma 7**.
 
-**Status:** reserved. The project will be generated in **Version 3** with the official Nest CLI
-and then adapted to the monorepo (shared tsconfig, workspace packages).
+**Status:** Version 2. Backend foundation, authentication and sessions. Redis, BullMQ and
+WebSockets arrive in later versions ([roadmap](../../docs/roadmap.md)).
 
-## Planned stack
+## Quick start
 
-Node.js · NestJS · TypeScript (strict) · PostgreSQL · Prisma · Redis · BullMQ · WebSockets
-(Socket.IO through Nest gateways) · JWT · RBAC with resource policies · Swagger/OpenAPI
+```bash
+cp apps/api/.env.example apps/api/.env   # then set two random JWT secrets
+npm run db:deploy                        # apply migrations (from the repository root)
+npm run api:dev                          # http://localhost:3000, Swagger at /api/docs
+```
 
-## Process model
+PostgreSQL setup, tests, the phone connection and staging preparation:
+[docs/backend-development.md](../../docs/backend-development.md).
 
-One codebase, two entrypoints:
+## Endpoints
 
-| Process | Entrypoint | Responsibility |
+| Method | Path | Auth |
 | --- | --- | --- |
-| `api` | `src/main.ts` | HTTP (REST under `/api/v1`) and WebSocket gateway |
-| `worker` | `src/worker.ts` (V12) | BullMQ consumers: notifications, media processing, AI jobs, maintenance |
+| `POST` | `/api/v1/auth/register` | public |
+| `POST` | `/api/v1/auth/login` | public |
+| `POST` | `/api/v1/auth/refresh` | refresh token |
+| `POST` | `/api/v1/auth/logout` | Bearer |
+| `GET` | `/api/v1/auth/me` | Bearer |
+| `GET` | `/api/v1/users` | Bearer, `ADMIN` |
+| `GET` | `/health/live`, `/health/ready` | public |
 
-## Planned source layout
+## Source layout
 
 ```text
 apps/api/
 ├── prisma/
-│   ├── schema.prisma
-│   └── migrations/
-└── src/
-    ├── main.ts
-    ├── app.module.ts
-    ├── common/              Cross-cutting infrastructure (config, errors, logging, guards)
-    └── modules/
-        ├── auth/            V2
-        ├── users/           V2–V3
-        ├── organizations/   V3
-        ├── jobs/            V4
-        ├── sync/            V6
-        ├── locations/       V7
-        ├── messaging/       V8
-        ├── notifications/   V9
-        ├── files/           V9
-        ├── audit/           V4+
-        ├── analytics/       later
-        └── ai/              V17
+│   ├── schema.prisma            users, sessions, Role, SessionRevocationReason
+│   └── migrations/              committed SQL migrations
+├── prisma.config.ts             Prisma 7 CLI config (schema, migrations, DATABASE_URL)
+├── scripts/set-role.mjs         operator tool: grant a role by email
+├── src/
+│   ├── main.ts                  bootstrap: config, pipeline, Swagger, listen
+│   ├── app.module.ts            modules + global guards (JWT, then roles)
+│   ├── app.setup.ts             HTTP pipeline shared with E2E tests
+│   ├── swagger.setup.ts         OpenAPI + Swagger UI with bearer auth
+│   ├── config/                  validated, typed configuration from the environment
+│   ├── database/                PrismaService (pg driver adapter)
+│   ├── common/
+│   │   ├── decorators/          @Public, @Roles, @CurrentUser
+│   │   ├── errors/              error codes (checked against @fieldops/types), AppException
+│   │   ├── filters/             every exception → error envelope
+│   │   ├── guards/              RolesGuard
+│   │   ├── interceptors/        success envelope
+│   │   ├── middleware/          request ID + access log
+│   │   ├── pipes/               global ValidationPipe
+│   │   ├── swagger/             envelope schemas for OpenAPI
+│   │   └── types/               AuthenticatedUser, Express augmentation
+│   ├── auth/
+│   │   ├── auth.controller.ts   /auth endpoints
+│   │   ├── auth.service.ts      register, login, refresh (rotation + reuse detection), logout
+│   │   ├── password.service.ts  Argon2id
+│   │   ├── tokens.service.ts    JWT issue/verify, refresh token hashing
+│   │   ├── sessions.service.ts  sessions table (create, rotate, revoke)
+│   │   ├── dto/  guards/  strategies/  types/
+│   ├── users/                   users table, profile DTO, admin list, Role
+│   ├── health/                  liveness and readiness
+│   └── generated/prisma/        generated client (gitignored)
+└── test/                        E2E tests (Vitest + Supertest, real PostgreSQL)
 ```
 
-Modules are created in the version that needs them, never earlier.
+Modules are created in the version that needs them, never earlier. The module rules
+(controllers → services → data, module-owned tables) are in
+[docs/backend-architecture.md](../../docs/backend-architecture.md#4-inside-a-module).
 
-See [docs/backend-architecture.md](../../docs/backend-architecture.md) for the full design.
+## Scripts
+
+| Script | What it does |
+| --- | --- |
+| `start:dev` | Watch mode |
+| `build` / `start:prod` | Generate the Prisma client and compile to `dist/`, then run `node dist/main.js` |
+| `test` | Unit tests (Vitest) |
+| `test:e2e` | E2E tests against `fieldops_test` |
+| `typecheck` / `lint` / `format` | `tsc --noEmit`, oxlint (type-aware), Prettier |
+| `db:migrate` / `db:deploy` / `db:status` / `db:studio` | Prisma Migrate and Studio |
+| `user:set-role -- <email> <ROLE>` | Grant WORKER, MANAGER or ADMIN |

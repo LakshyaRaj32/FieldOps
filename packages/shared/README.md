@@ -10,7 +10,7 @@ Pure, framework-free TypeScript that both `apps/mobile` and `apps/api` need at r
 
 | Planned content | Introduced in | Why it is shared |
 | --- | --- | --- |
-| API contract schemas (runtime validation of request/response payloads) | V3–V4 | Client and server validate the same shapes |
+| API contract schemas (runtime validation of request/response payloads) | V6 (sync), if needed | Client and server validate the same shapes. V2 shares contract *types* through `@fieldops/types` instead |
 | Job status state machine (allowed transitions) | V4 | The mobile app validates transitions offline; the server enforces them |
 | Sync protocol envelopes and mutation type definitions | V6 | Both sides must agree on the sync protocol exactly |
 | Retry/backoff calculation | V6 | Same policy for mobile sync and server-side workers |

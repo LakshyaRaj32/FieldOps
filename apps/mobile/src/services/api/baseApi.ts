@@ -1,10 +1,46 @@
-import { createApi } from '@reduxjs/toolkit/query/react';
+import { createApi, type BaseQueryApi } from '@reduxjs/toolkit/query/react';
 
 import { getConfig } from '../../app/config';
-import { createBaseQuery } from './baseQuery';
+import type { CredentialStore } from '../auth/credentialStore';
+import { sessionEnded } from '../auth/sessionEvents';
+import { createBaseQuery, type BaseQueryAuth } from './baseQuery';
 
 /** Prefix for versioned business endpoints (health checks live outside it). */
 export const API_V1 = '/api/v1';
+
+/** Services the store hands to thunks and to the base query (the thunk extra argument). */
+export interface StoreServices {
+  readonly credentials: CredentialStore;
+}
+
+/** Reads the credential store from the thunk extra argument, if the store provides one. */
+export function servicesOf(
+  api: Pick<BaseQueryApi, 'extra'>,
+): StoreServices | undefined {
+  const { extra } = api;
+  return typeof extra === 'object' && extra !== null && 'credentials' in extra
+    ? (extra as StoreServices)
+    : undefined;
+}
+
+function resolveAuth(api: BaseQueryApi): BaseQueryAuth | undefined {
+  const services = servicesOf(api);
+  if (services === undefined) {
+    return undefined;
+  }
+  const { credentials } = services;
+  return {
+    getAccessToken: () => credentials.getAccessToken(),
+    getRefreshToken: () => credentials.getRefreshToken(),
+    onTokensRefreshed: tokens => credentials.updateTokens(tokens),
+    onSessionEnded: async ({ dispatch }) => {
+      await credentials.clear();
+      dispatch(sessionEnded());
+      // Runs at request time, long after baseApi below has been created.
+      dispatch(baseApi.util.resetApiState());
+    },
+  };
+}
 
 /**
  * The root RTK Query API. It is empty on purpose: features add their endpoints with
@@ -19,7 +55,7 @@ export const baseApi = createApi({
   baseQuery: createBaseQuery(() => {
     const config = getConfig();
     return { baseUrl: config.apiBaseUrl, timeoutMs: config.apiTimeoutMs };
-  }),
+  }, resolveAuth),
   refetchOnReconnect: true,
   endpoints: () => ({}),
 });

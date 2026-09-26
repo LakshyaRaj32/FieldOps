@@ -1,73 +1,71 @@
-import {
-  createSlice,
-  type Dispatch,
-  type PayloadAction,
-} from '@reduxjs/toolkit';
-import { Role } from '@fieldops/types';
+import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import type { UserProfile } from '@fieldops/types';
 
-import { baseApi } from '../../services/api/baseApi';
+import { sessionEnded } from '../../services/auth/sessionEvents';
 
-export interface SessionUser {
-  readonly displayName: string;
-  readonly role: Role;
-}
+export type SessionUser = UserProfile;
+
+/** Why the user is signed out: shown on the sign-in screen. */
+export type SignedOutReason = 'signedOut' | 'sessionEnded';
 
 /**
  * Application state: who is using the app.
  *
- * Version 1 has no real authentication. The only way to sign in is the development entry
- * on the login screen (`source: 'development'`), available only in development builds.
- * Version 2 replaces it with real sessions; tokens will live in secure storage, never here.
+ * - `restoring`: app start, while the stored session is read from secure storage
+ * - `signedOut`: the sign-in screens are shown
+ * - `signedIn`: the main app is shown, with the user's profile
+ *
+ * Tokens are never stored here; they live in the credential store (Android Keystore). The
+ * thunks that move between these states are in features/auth/session.ts.
  */
 export type SessionState =
-  | { readonly status: 'signedOut' }
-  | {
-      readonly status: 'signedIn';
-      readonly user: SessionUser;
-      readonly source: 'development';
-    };
+  | { readonly status: 'restoring' }
+  | { readonly status: 'signedOut'; readonly reason?: SignedOutReason }
+  | { readonly status: 'signedIn'; readonly user: SessionUser };
 
-const initialState = { status: 'signedOut' } as SessionState;
-
-const DEVELOPMENT_NAMES: Readonly<Record<Role, string>> = {
-  [Role.WORKER]: 'Dev Worker',
-  [Role.MANAGER]: 'Dev Manager',
-  [Role.ADMIN]: 'Dev Admin',
-};
+const initialState = { status: 'restoring' } as SessionState;
 
 export const sessionSlice = createSlice({
   name: 'session',
   initialState,
   reducers: {
-    developmentSessionStarted: (
-      _state,
-      action: PayloadAction<Role>,
-    ): SessionState => ({
+    signedIn: (_state, action: PayloadAction<SessionUser>): SessionState => ({
       status: 'signedIn',
-      user: {
-        displayName: DEVELOPMENT_NAMES[action.payload],
-        role: action.payload,
-      },
-      source: 'development',
+      user: action.payload,
     }),
-    signedOut: (): SessionState => ({ status: 'signedOut' }),
+    /** The profile was refreshed from the server (name or role changed). */
+    userUpdated: (state, action: PayloadAction<SessionUser>): SessionState =>
+      state.status === 'signedIn' ? { ...state, user: action.payload } : state,
+    signedOut: (
+      _state,
+      action: PayloadAction<SignedOutReason | undefined>,
+    ): SessionState =>
+      action.payload === undefined
+        ? { status: 'signedOut' }
+        : { status: 'signedOut', reason: action.payload },
+  },
+  extraReducers: builder => {
+    builder.addCase(
+      sessionEnded,
+      (): SessionState => ({ status: 'signedOut', reason: 'sessionEnded' }),
+    );
   },
   selectors: {
     selectSession: state => state,
     selectSessionStatus: state => state.status,
     selectSessionUser: state =>
       state.status === 'signedIn' ? state.user : null,
+    selectSignedOutReason: state =>
+      state.status === 'signedOut' ? state.reason : undefined,
   },
 });
 
-export const { developmentSessionStarted } = sessionSlice.actions;
-export const { selectSession, selectSessionStatus, selectSessionUser } =
-  sessionSlice.selectors;
-
-/** Signs out and clears cached server state so the next user never sees the previous user's data. */
-export const signOut = () => (dispatch: Dispatch) => {
-  dispatch(sessionSlice.actions.signedOut());
-  dispatch(baseApi.util.resetApiState());
-};
+export const { signedIn, userUpdated, signedOut } = sessionSlice.actions;
+export const {
+  selectSession,
+  selectSessionStatus,
+  selectSessionUser,
+  selectSignedOutReason,
+} = sessionSlice.selectors;
 
 export default sessionSlice.reducer;

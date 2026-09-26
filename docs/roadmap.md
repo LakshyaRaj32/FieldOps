@@ -7,8 +7,8 @@ FieldOps is built in small, complete versions. Each version has a focused scope 
 | --- | --- | --- |
 | **V0** | Architecture and repository foundation | Monorepo structure, architecture and decision docs, strict TS config, role vocabulary |
 | V1 | React Native foundation | RN CLI app (New Architecture, Hermes), navigation shell, Redux store, design system basics, lint/format/test tooling |
-| V2 | Authentication and sessions | Login, token rotation, secure token storage, session state, role-based navigation |
-| V3 | Backend foundation, PostgreSQL, Prisma | NestJS app, config validation, Prisma schema and migrations, local Postgres in Docker, OpenAPI, health checks |
+| V2 | Backend foundation and authentication | NestJS app, config validation, Prisma schema and migrations, local PostgreSQL, OpenAPI, health checks; register/login, token rotation with reuse detection, server-side sessions, role guard; secure token storage, session state and auth navigation on mobile |
+| V3 | Organizations and user administration | Organizations and tenancy, org-scoped users and tokens, role administration API (remaining V3 scope after the V2 resequencing; Docker Compose for PostgreSQL when adopted) |
 | V4 | Jobs / work orders | Job model, assignments, state machine, job events, manager and worker job screens, audit writer |
 | V5 | Offline SQLite architecture | Local DB, migrations, repositories, reactive queries, local command handlers, outbox table |
 | V6 | Custom synchronization engine | Push/pull protocol, idempotent mutation processing, change log, conflict policies, retry/backoff |
@@ -28,14 +28,12 @@ FieldOps is built in small, complete versions. Each version has a focused scope 
 
 ## Sequencing notes
 
-- **V2 before V3.** Authentication needs a server with a user store, but the full backend
-  foundation (Prisma, Postgres) arrives in V3. Options when V2 starts:
-  **(a)** swap V2 and V3 (recommended: auth then builds on real persistence), or
-  **(b)** scope V2 to the mobile session architecture (secure storage, session state,
-  navigation guards, token refresh flow) plus a minimal NestJS auth module, with the rest of
-  the backend foundation following in V3.
-  Either way, **no fake auth server**. This decision should be made at the start of V2.
-- **Local Docker before V16.** Postgres runs in Docker Compose from V3 for development. V16 is
+- **V2 and V3 (decided at the start of V2).** Authentication needs a server with a user
+  store, so V2 builds the backend foundation (NestJS, Prisma, PostgreSQL, configuration,
+  OpenAPI, health checks) together with real authentication. No fake auth server was ever
+  used. V3 keeps the remaining backend work: organizations, tenancy and user administration.
+- **Local PostgreSQL.** By the repository owner's decision, V2 uses a native PostgreSQL 18
+  install instead of Docker. Compose is adopted later; the API needs no changes for it. V16 is
   about production images, CI/CD and deployment.
 - **Notifications before queues.** V9 sends notifications from the API behind a service
   interface. V12 moves delivery onto BullMQ without changing callers.
@@ -90,7 +88,7 @@ FieldOps is built in small, complete versions. Each version has a focused scope 
 ### Handoff
 
 - [x] Initial commit created and tagged `v0.0.0` (done by the repository owner)
-- [ ] V2/V3 sequencing decision made before starting V2
+- [x] V2/V3 sequencing decision made before starting V2 (V2 = backend foundation + auth)
 
 ---
 
@@ -145,3 +143,75 @@ Project location: `L:\Projects\FieldOps` (a clone of the V0 repository; same Git
 
 - [ ] Version 1 committed and pushed; working tree clean
 - [ ] Tagged `v0.1.0`
+
+---
+
+## Version 2 completion checklist
+
+Scope: backend foundation and real authentication, connected to the mobile app.
+
+### Backend
+
+- [x] NestJS 12 modular monolith under `apps/api` (`config`, `database`, `common`, `auth`,
+      `users`, `health`)
+- [x] PostgreSQL 18 locally (native install; Docker deferred by decision)
+- [x] Prisma 7 configured (`prisma.config.ts`, pg driver adapter, generated client gitignored)
+- [x] Initial migration: `users`, `sessions`, `Role`, `SessionRevocationReason`, email check
+      constraint; indexing decisions documented in [database.md](database.md)
+- [x] Register, login, refresh (rotation + reuse detection), logout, me under `/api/v1/auth`
+- [x] Argon2id password hashing; refresh tokens stored as SHA-256 hashes
+- [x] Global JWT guard (`@Public()` opt-out) with session check; `@Roles()` + `RolesGuard`;
+      ADMIN-only `GET /api/v1/users`
+- [x] Validated, typed environment configuration; `.env.example`; no committed secrets
+- [x] Consistent `{ success, data }` / `{ success: false, error }` envelope; safe errors
+- [x] Swagger at `/api/docs` with bearer auth; Postman collection in `docs/postman/`
+- [x] helmet, CORS allow-list, request IDs, access log without sensitive values
+- [x] Health checks `/health/live` and `/health/ready`; deployable configuration (PORT, HOST,
+      DATABASE_URL and secrets from the environment)
+
+### Mobile
+
+- [x] Development entry removed; Login and Register screens against the real API
+- [x] Tokens in Android Keystore-backed storage (`react-native-keychain`), never in Redux
+- [x] Session restore at start-up (works offline), revalidation with `/auth/me`
+- [x] Authorization header and single-flight refresh with one retry in the base query
+- [x] Refresh rejection clears credentials and returns to sign-in with a message
+- [x] Sign-out revokes the server session and always clears local state
+- [x] User information on Dashboard and Profile
+- [x] User-friendly messages per error code; server text never shown for `5xx`
+
+### Tests
+
+- [x] API unit tests: config, durations, password hashing, tokens, role guard, exception filter
+- [x] API E2E tests (real PostgreSQL): registration, duplicate email, hashing, login success
+      and failure, token issuance, protected endpoint, invalid/expired tokens, refresh, rotation,
+      reuse detection, concurrent refresh, revoked/expired sessions, logout, multi-device, role
+      guard, disabled accounts, error envelope, health, request IDs
+- [x] Mobile tests: session slice, credential store, base query auth and refresh, error model,
+      form validation, sign-in/restore/sign-out flows (tokens never in Redux)
+
+### Verification
+
+- [x] `npm run typecheck` and `npm run lint` pass in all workspaces (0 warnings); unit tests
+      pass (API 48, mobile 83)
+- [x] `npm run api:test:e2e` passes against `fieldops_test` (33 tests)
+- [x] Compiled API (`node dist/main.js`) starts; health, Swagger UI/OpenAPI and the full auth
+      flow verified over HTTP
+- [ ] Postman collection run by the repository owner
+- [ ] Android build succeeds with `react-native-keychain` (run by the repository owner)
+- [ ] Register, login, token refresh and logout verified on the physical phone
+- [x] Database records verified (Argon2id hashes, SHA-256 refresh token hashes, `LOGOUT`
+      revocation reason, indexes and foreign key)
+- [x] API log checked: no JWTs, password hashes, passwords or emails
+
+### Documentation
+
+- [x] New: [authentication.md](authentication.md), [api.md](api.md), [database.md](database.md),
+      [backend-development.md](backend-development.md), Postman collection
+- [x] Updated: README, architecture, backend architecture, technology decisions, mobile
+      architecture, mobile development, development, DevOps, roadmap, app READMEs
+
+### Handoff
+
+- [ ] Committed (`feat: implement backend foundation and authentication`) and tagged `v2.0.0`
+      by the repository owner

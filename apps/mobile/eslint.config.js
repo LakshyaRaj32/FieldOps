@@ -41,6 +41,7 @@ module.exports = [
             boundary('react-native-config', 'src/app/config'),
             boundary('@react-native-community/netinfo', 'src/services/network'),
             boundary('react-native-mmkv', 'src/services/storage'),
+            boundary('react-native-keychain', 'src/services/storage'),
           ],
         },
       ],

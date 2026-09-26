@@ -76,14 +76,14 @@ measurements, not a goal in itself.
 FieldOps/
 ├── apps/
 │   ├── mobile/        React Native + TypeScript (+ Kotlin under android/)      V1
-│   └── api/           NestJS + TypeScript + Prisma                            V3
+│   └── api/           NestJS + TypeScript + Prisma                            V2
 ├── packages/
 │   ├── config/        Shared tooling config (strict tsconfig base)            V0
 │   ├── types/         Shared domain/contract types (Role, ...)                V0
 │   └── shared/        Shared framework-free runtime code (schemas, state      reserved
 │                      machines, sync protocol, backoff)
 ├── infra/
-│   └── docker/        Local infrastructure (Compose) and image builds          V3+
+│   └── docker/        Local infrastructure (Compose) and image builds          later
 └── docs/              Architecture and decision documentation                 V0
 ```
 
@@ -161,7 +161,8 @@ document and [technology-decisions.md](technology-decisions.md).
 
 ## 7. Conceptual domain model
 
-This is the initial model. The Prisma schema in V3–V4 will refine it.
+This is the initial model. V2 implemented `User` and `Session` ([database.md](database.md)); later
+versions refine the rest.
 
 ```text
 Organization 1───* User (role: WORKER | MANAGER | ADMIN)
@@ -237,8 +238,9 @@ implemented in V2 onward.
 - **Time.** Stored and transmitted in UTC ISO-8601. Client timestamps are recorded as
   `occurredAt` (when the worker did it). Server timestamps (`receivedAt`, change sequence) are
   authoritative for ordering and sync. Device clocks are never trusted for correctness.
-- **API errors.** RFC 9457 Problem Details (`application/problem+json`) with stable,
-  machine-readable error codes.
+- **API errors.** A consistent envelope, `{ success: false, error: { code, message } }`, with
+  stable, machine-readable error codes (V2 replaced the planned RFC 9457 Problem Details; see
+  [api.md](api.md)).
 - **API versioning.** URI-versioned (`/api/v1`). The sync protocol also carries its own
   `protocolVersion`, because old app versions stay in the field for a long time.
 - **Correlation.** Every request carries or receives a request ID, which is propagated into
@@ -250,8 +252,9 @@ implemented in V2 onward.
 ## 11. Security baseline (applies from the first line of code)
 
 - Passwords hashed with **Argon2id**. Short-lived JWT access tokens and rotating refresh tokens
-  stored **hashed** server-side, with reuse detection (V2).
-- Tokens stored on the device in Keystore-backed secure storage.
+  stored **hashed** server-side, with reuse detection (implemented in V2, see
+  [authentication.md](authentication.md)).
+- Tokens stored on the device in Keystore-backed secure storage (`react-native-keychain`).
 - HTTPS everywhere outside local development. WebSocket connections authenticate on handshake.
 - Authorization checked on the server for every operation, including every sync mutation
   individually. Client-side role checks are only for UX.

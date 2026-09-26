@@ -49,7 +49,7 @@ export function DashboardScreen({
     <Screen>
       <View style={{ gap: theme.spacing.xs }}>
         <AppText tone="muted">{greeting(new Date().getHours())},</AppText>
-        <AppText variant="title">{user?.displayName ?? 'there'}</AppText>
+        <AppText variant="title">{user?.firstName ?? 'there'}</AppText>
         {user !== null ? <Badge label={user.role} tone="primary" /> : null}
       </View>
 

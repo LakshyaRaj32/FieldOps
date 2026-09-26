@@ -7,12 +7,13 @@ How to set up, work in and contribute to the FieldOps repository.
 | Tool | Version | Needed from |
 | --- | --- | --- |
 | Node.js | 24 LTS (see `.nvmrc`) | V0 |
-| npm | 10+ (bundled with Node) | V0 |
+| npm | 11 (bundled with Node 24) | V0 |
 | Git | 2.39+ | V0 |
 | JDK | 17 (the version React Native requires for Android builds) | V1 |
 | Android SDK + platform-tools (adb), Android Studio optional | Current stable, `ANDROID_HOME` set | V1 |
 | Android phone with USB debugging (an emulator is optional) | Android 7+ (minSdk 24) | V1 |
-| Docker Desktop (or Docker Engine with Compose v2) | Current stable | V3 |
+| PostgreSQL | 18 (native install; see [backend-development.md](backend-development.md#1-postgresql)) | V2 |
+| Docker Desktop (or Docker Engine with Compose v2) | Current stable | Later (deferred) |
 
 Use a Node version manager (`nvm`, `fnm`, or `nvm-windows`) so the `.nvmrc` version is used.
 
@@ -27,17 +28,18 @@ npm run lint
 npm test
 ```
 
-Running the Android app: [mobile-development.md](mobile-development.md).
+Running the API: [backend-development.md](backend-development.md). Running the Android app:
+[mobile-development.md](mobile-development.md).
 
 ## Repository layout
 
 ```text
 apps/mobile      React Native app (foundation built in V1)
-apps/api         NestJS API (generated in V3)
+apps/api         NestJS API (foundation and auth in V2)
 packages/config  Shared tooling config (tsconfig base)
-packages/types   Shared domain types (Role, ...)
+packages/types   Shared domain and API contract types (Role, envelope, auth)
 packages/shared  Reserved for shared runtime code (schemas, state machines, sync protocol)
-infra/docker     Local infrastructure (Compose from V3)
+infra/docker     Local infrastructure (Compose, later)
 docs/            Architecture and decisions
 ```
 
@@ -48,11 +50,15 @@ docs/            Architecture and decisions
 | `npm run typecheck` | Runs `typecheck` in every workspace that defines it |
 | `npm run lint` | Runs `lint` in every workspace that defines it |
 | `npm test` | Runs `test` in every workspace that defines it |
+| `npm run api:dev` | Starts the API in watch mode |
+| `npm run api:build` / `npm run api:start` | Compiles the API / runs the compiled API |
+| `npm run api:test:e2e` | API end-to-end tests against `fieldops_test` |
+| `npm run db:migrate` / `npm run db:deploy` | Create and apply a migration (dev) / apply committed migrations |
 | `npm run mobile:start` | Starts Metro for the mobile app |
 | `npm run mobile:android` | Builds, installs and launches the debug app on the connected phone (active ABI only) |
+| `npm run mobile:reverse` | `adb reverse` for the API (3000) and Metro (8081) |
 
-More scripts (for example `dev:api`) are added in the version that introduces the tooling
-they run.
+Scripts are added in the version that introduces the tooling they run.
 
 **Root-level dev dependencies.** `typescript` and `eslint` are declared at the root so npm
 installs exactly one version of each for every workspace (see

@@ -34,20 +34,24 @@ for infrastructure. Build the FieldOps-specific systems ourselves.**
 | Mobile environment config | react-native-config (per-build-type dotenv files) | V1 |
 | Local database | SQLite (library selected in V5) | V5 |
 | Key-value storage | MMKV 4 (on Nitro Modules) | V1 |
+| Secure credential storage | react-native-keychain 10 (Android Keystore, AES-GCM) | V2 |
 | Connectivity signal | NetInfo | V1 |
 | Animations | React Native Reanimated 4 (with react-native-worklets) | V1 / V14 |
 | Mobile quality tooling | TypeScript 6.0, ESLint 9 (flat config), Prettier, Jest | V1 |
 | Native modules | Kotlin Turbo Modules | V7 |
-| Backend framework | NestJS | V3 (auth endpoints in V2; see roadmap note) |
-| Database | PostgreSQL | V3 |
-| ORM / migrations | Prisma | V3 |
+| Backend framework | NestJS 12 (ESM, Express 5) | V2 |
+| Database | PostgreSQL 18 | V2 |
+| ORM / migrations | Prisma 7 (pg driver adapter) | V2 |
+| Authentication | Argon2id (`argon2`), JWT (`@nestjs/jwt`, `passport-jwt`), server-side sessions | V2 |
+| Backend validation / API docs | class-validator + class-transformer, `@nestjs/swagger` | V2 |
+| Backend tests / lint | Vitest 4 + Supertest, oxlint | V2 |
 | Realtime | WebSockets through Socket.IO and Nest gateways | V8 |
 | Push | Firebase Cloud Messaging | V9 |
 | File storage | S3-compatible object storage (MinIO locally) | V9 |
 | Distributed state | Redis | V10 |
 | Queues | BullMQ | V12 |
 | Observability | Structured logs (pino), OpenTelemetry, Prometheus/Grafana | V15 |
-| Containers / CI | Docker, GitHub Actions | V3 (local infra), V16 |
+| Containers / CI | Docker, GitHub Actions | Later (local infra: native PostgreSQL for now), V16 |
 
 ---
 
@@ -331,8 +335,9 @@ room and authorization rules, and the rule that **events are hints and sync is t
 
 ## Docker
 
-**Why.** Reproducible infrastructure. From V3, local PostgreSQL (and later Redis and MinIO)
-run in Docker Compose, so every developer and CI run uses identical versions. From V16, the API
+**Why.** Reproducible infrastructure. Local PostgreSQL (and later Redis and MinIO) will run in
+Docker Compose, so every developer and CI run uses identical versions. Version 2 uses a native
+PostgreSQL 18 install instead, by the repository owner's decision; Compose is adopted later. From V16, the API
 and worker are built into a single multi-stage image that runs identically in CI, staging and
 production.
 
@@ -372,6 +377,32 @@ sampling policy and handoff to the sync engine.
 | **S3-compatible object storage** | Binary media does not belong in Postgres. Presigned uploads keep large bodies off the API. MinIO locally, a managed S3-compatible store in production. |
 | **Argon2id and a standard JWT library** | Proven cryptography. We never implement crypto primitives. |
 
+## Backend libraries (V2)
+
+Version 2 created the backend. These are the choices it made, and why.
+
+| Choice | Why | Alternatives considered |
+| --- | --- | --- |
+| **NestJS 12** | The current major (11 is now tagged `legacy`). ESM-only, so the API is an ESM package (`"type": "module"`, `nodenext` resolution, `.js` import suffixes). Generated from the official CLI template, then adapted to the monorepo | NestJS 11 (CommonJS, more tutorials) was rejected to avoid a major migration soon after starting |
+| **Prisma 7** | The `prisma-client` generator emits TypeScript into `src/generated` (no Rust query engine; queries go through `@prisma/adapter-pg` on node-postgres). `prisma.config.ts` holds the CLI configuration | Prisma 6 (legacy engine); Drizzle or Kysely (closer to SQL, but the V0 decision for Prisma stands) |
+| **Argon2id** (`argon2`) | Memory-hard, OWASP's first recommendation, no 72-byte truncation. Prebuilt binaries for Windows and Linux | bcrypt (allowed by the brief, weaker against GPUs, truncates input) |
+| **`@nestjs/jwt` + `passport-jwt`** | The standard Nest authentication stack. We configure it (algorithm, issuer, audience) and implement FieldOps session logic on top, but no cryptography | A hand-written guard over `jsonwebtoken` (fewer dependencies, but duplicates what Passport does) |
+| **HS256** | A single issuer and verifier (the API) | EdDSA/RS256 with key IDs: V18, or earlier if another service verifies tokens |
+| **class-validator + class-transformer** | Native to Nest's `ValidationPipe` and `@nestjs/swagger`: one DTO class gives validation, transformation and OpenAPI. Contract *types* are shared through `@fieldops/types`, and DTOs `implements` them | Zod (see the resolved decision below) |
+| **`uuid` (v7)** | Session IDs must exist before the row is written (the refresh token contains them); Node has no built-in UUIDv7 | Two writes per login, or UUIDv4 |
+| **helmet** | Standard security headers | Setting headers by hand |
+| **Vitest + Supertest, oxlint** | The Nest 12 template defaults. Vitest runs TypeScript with decorator metadata via Vite 8 (oxc), with no extra transform setup | Jest + ts-jest (CommonJS-oriented, awkward with ESM), ESLint + typescript-eslint (used by the mobile app; kept separate because the RN config ties it to RN rules) |
+| **Custom config validation** instead of `@nestjs/config` | One small pure function (`parseAppConfig`) gives a typed object, aggregated errors and unit tests, mirroring the mobile app's `env.ts`. `process.loadEnvFile` (Node built-in) reads `.env` | `@nestjs/config` + a schema library |
+
+**Mobile: react-native-keychain for tokens.** V1 decided that tokens go in Keystore-backed
+secure storage, never in MMKV. V2 picked `react-native-keychain` 10: it is the most widely used
+option, it is a Turbo Module (New Architecture), and on Android it encrypts with AES-GCM under a
+key that lives in the Keystore (hardware-backed where available). The value is stored with
+`AES_GCM_NO_AUTH` (no biometric prompt), because the app must refresh tokens without user
+interaction. `react-native-sensitive-info` 6 (Nitro-based and more recently released) was the
+alternative. It was not chosen because its generated Nitro code must match the Nitro runtime
+version that MMKV already pins, which couples two native dependencies' upgrade schedules.
+
 ## Pending decisions
 
 These are deliberately deferred to the version where the information to decide exists.
@@ -379,8 +410,8 @@ These are deliberately deferred to the version where the information to decide e
 | Decision | Decide in | Leading option |
 | --- | --- | --- |
 | SQLite library | V5 | op-sqlite or expo-sqlite |
-| Runtime schema library for shared contracts | V3 | Zod schemas in `@fieldops/shared`, integrated with Nest validation and OpenAPI |
-| How the API consumes workspace packages (compiled vs source) | V3 | Compile shared packages with `tsc` project references |
+| Runtime schema library for shared *runtime* contracts (sync payloads) | V6 | Zod in `@fieldops/shared`, used on both sides, if sync payloads need validation on the device too |
+| How the API consumes workspace packages at runtime | When `@fieldops/shared` gets runtime code | Compile shared packages with `tsc` project references (V2 only needs type-only imports, which are erased) |
 | HTTP adapter | V19 (re-evaluate) | Express (default) unless benchmarks favor Fastify |
 | Local database encryption | V5 / V18 | SQLCipher-capable SQLite build with a Keystore-held key |
 | Hosting target | V16 | A managed container platform or a single VM with Compose; managed Postgres and Redis |
@@ -395,3 +426,7 @@ These are deliberately deferred to the version where the information to decide e
 | TypeScript major version | V1 | TypeScript 6.0 across the repository (typescript-eslint requires < 6.1) |
 | ESLint version and config format | V1 | ESLint 9 with flat config (the newest version React Native's config supports) |
 | Mobile environment configuration | V1 | react-native-config with per-build-type dotenv files |
+| API error format | V2 | `{ success, data }` / `{ success: false, error: { code, message, details?, requestId } }` envelope, not RFC 9457 ([api.md](api.md)) |
+| Backend validation library | V2 | class-validator DTOs (Nest-native, feeds OpenAPI). Shared *types* in `@fieldops/types`; Zod stays an option for runtime-shared schemas (pending above) |
+| Secure token storage on the device | V2 | react-native-keychain 10 (see [Backend libraries (V2)](#backend-libraries-v2)) |
+| Local PostgreSQL for development | V2 | Native PostgreSQL 18 install; Docker Compose deferred by the repository owner |

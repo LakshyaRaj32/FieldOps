@@ -8,3 +8,8 @@ export {
   type SegmentedControlProps,
   type SegmentedOption,
 } from './SegmentedControl';
+export {
+  TextField,
+  type TextFieldHandle,
+  type TextFieldProps,
+} from './TextField';

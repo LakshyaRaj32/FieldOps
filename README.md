@@ -12,20 +12,26 @@ assign and monitor jobs and workers in real time.
 
 | | |
 | --- | --- |
-| **Current version** | **Version 1: React Native mobile foundation** |
-| Completed | V0: architecture and repository foundation · V1: mobile foundation |
-| Next | Version 2: authentication and sessions (not started) |
+| **Current version** | **Version 2: backend foundation and authentication** |
+| Completed | V0: architecture and repository foundation · V1: mobile foundation · V2: backend and auth |
+| Next | Version 3: organizations and user administration (not started) |
 
-Version 1 delivers the Android app's foundation:
-- navigation (sign-in flow and the main tabs: Dashboard, Jobs, Notifications, Profile);
-- Redux Toolkit state and the RTK Query API layer;
-- a NetInfo connectivity service;
-- per-build-type API environments;
-- a light/dark UI foundation and application-level error handling;
-- linting and tests.
+Version 2 delivers the first working end-to-end stack:
 
-Sign-in is a clearly labeled **development entry** until real authentication arrives in V2.
-There is no backend yet (V3). See [docs/roadmap.md](docs/roadmap.md).
+```text
+React Native (Android) ──HTTP──▶ NestJS API ──Prisma──▶ PostgreSQL
+```
+
+- a NestJS 12 modular monolith (`apps/api`) with validated configuration, Prisma 7 and
+  PostgreSQL 18, a consistent response envelope, Swagger and health checks;
+- registration and sign-in with Argon2id, short-lived access tokens, rotating refresh tokens
+  with reuse detection, server-side sessions and a role-based authorization foundation;
+- on the phone: Login/Register screens, tokens in Android Keystore-backed storage, session
+  restore (also offline), transparent token refresh and sign-out;
+- unit and E2E tests (against a real database), a Postman collection.
+
+Version 1 built the app's foundation (navigation, Redux Toolkit and RTK Query, connectivity,
+API environments, theming, error handling). See [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture at a glance
 
@@ -57,13 +63,13 @@ The details are in [docs/architecture.md](docs/architecture.md).
 FieldOps/
 ├── apps/
 │   ├── mobile/        React Native + TypeScript (+ Kotlin)          → foundation built in V1
-│   └── api/           NestJS + TypeScript + Prisma                  → generated in V3 (reserved)
+│   └── api/           NestJS + TypeScript + Prisma + PostgreSQL     → foundation and auth in V2
 ├── packages/
 │   ├── config/        Shared strict tsconfig base
-│   ├── types/         Shared domain types (Role)
+│   ├── types/         Shared domain and API contract types (Role, envelope, auth)
 │   └── shared/        Reserved: shared runtime code (schemas, state machines, sync protocol)
 ├── infra/
-│   └── docker/        Local infrastructure (Compose from V3), images (V16)
+│   └── docker/        Local infrastructure (Compose, later), images (V16)
 └── docs/              Architecture, decisions, principles, roadmap
 ```
 
@@ -86,11 +92,11 @@ Why each technology was chosen: [docs/technology-decisions.md](docs/technology-d
 | Tool | Version |
 | --- | --- |
 | Node.js | 24 (see `.nvmrc`) |
-| npm | 10+ |
+| npm | 11 (bundled with Node 24; see the troubleshooting note in docs/backend-development.md) |
+| PostgreSQL | 18 (native install for now) |
 | JDK | 17 |
 | Android SDK + platform-tools (adb) | Current, with `ANDROID_HOME` set |
 | Android phone | USB debugging enabled (an emulator is optional) |
-| Docker | From Version 3 |
 
 ## Getting started
 
@@ -98,23 +104,35 @@ Why each technology was chosen: [docs/technology-decisions.md](docs/technology-d
 npm install          # from the repository root: installs and links all workspaces
 npm run typecheck    # strict TypeScript, all workspaces
 npm run lint         # ESLint, all workspaces
-npm test             # Jest, all workspaces
+npm test             # unit tests, all workspaces (Jest for mobile, Vitest for the API)
+npm run api:test:e2e # API end-to-end tests against the fieldops_test database
+```
+
+## Run the API
+
+One-time PostgreSQL setup (role `fieldops`, databases `fieldops_dev` and `fieldops_test`) and
+`apps/api/.env`: [docs/backend-development.md](docs/backend-development.md). Then:
+
+```bash
+npm run db:deploy    # apply migrations
+npm run api:dev      # http://localhost:3000/api/v1, Swagger UI at /api/docs
 ```
 
 ## Run the mobile app
 
-With the phone connected (`adb devices` shows it as `device`):
+With the API running and the phone connected (`adb devices` shows it as `device`):
 
 ```bash
-# terminal 1: Metro
+npm run mobile:reverse   # phone's localhost:3000 and :8081 → this computer
+
+# terminal 2: Metro
 npm run mobile:start
 
-# terminal 2: build, install and launch on the phone
+# terminal 3: build, install and launch on the phone
 npm run mobile:android
 ```
 
-The app appears as **FieldOps Dev**. Choose a development role on the login screen to explore
-the tabs. The API URL for each build type is set in `apps/mobile/.env.*` files, so switching
+The app appears as **FieldOps Dev**. Create an account or sign in. The API URL for each build type is set in `apps/mobile/.env.*` files, so switching
 from the local API to staging needs no code changes.
 
 Building APKs, API environments, testing and troubleshooting:
@@ -131,6 +149,10 @@ Building APKs, API environments, testing and troubleshooting:
 | [mobile-architecture.md](docs/mobile-architecture.md) | App structure, the six kinds of state, SQLite layer, navigation, Kotlin modules |
 | [mobile-development.md](docs/mobile-development.md) | Install, run on the phone, build APKs, API environments, testing, troubleshooting |
 | [backend-architecture.md](docs/backend-architecture.md) | Modules, layering, request lifecycle, data layer, auth, realtime, queues, Redis |
+| [backend-development.md](docs/backend-development.md) | PostgreSQL setup, running and testing the API, connecting the phone, staging preparation |
+| [authentication.md](docs/authentication.md) | Passwords, tokens, sessions, rotation and reuse detection, mobile token storage, security status |
+| [api.md](docs/api.md) | Versioning, response envelope, error codes, Swagger and Postman |
+| [database.md](docs/database.md) | Schema, indexing decisions, migrations |
 | [offline-first.md](docs/offline-first.md) | Offline capability matrix, write and read paths, local data lifecycle |
 | [synchronization.md](docs/synchronization.md) | Outbox, push/pull protocol, idempotency, conflict resolution, retry/backoff |
 | [devops.md](docs/devops.md) | Environments, containers, CI/CD, releases, observability, scaling path |

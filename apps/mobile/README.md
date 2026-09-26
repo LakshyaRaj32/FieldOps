@@ -2,10 +2,11 @@
 
 The FieldOps React Native application for Android. It serves both field workers and managers.
 
-**Status:** Version 1 foundation. The app contains navigation, state management, the API layer,
-connectivity, environment configuration, the UI and theme foundation, and error handling.
-Features arrive in later versions (auth in V2, jobs in V4, offline storage in V5, sync in V6,
-and so on).
+**Status:** Version 2. On top of the V1 foundation (navigation, state management, the API
+layer, connectivity, environment configuration, UI and theme, error handling), the app has real
+authentication against the FieldOps API: register, sign in, Keystore-backed token storage,
+session restore, transparent token refresh and sign-out. Features arrive in later versions
+(jobs in V4, offline storage in V5, sync in V6, and so on).
 
 ## Quick start
 
@@ -13,8 +14,10 @@ From the repository root, with the phone connected over USB:
 
 ```bash
 npm install              # once, from the root (never inside apps/mobile)
-npm run mobile:start     # terminal 1: Metro
-npm run mobile:android   # terminal 2: build, install, launch
+npm run api:dev          # terminal 1: the API (see docs/backend-development.md)
+npm run mobile:reverse   # forward ports 3000 (API) and 8081 (Metro) to the phone
+npm run mobile:start     # terminal 2: Metro
+npm run mobile:android   # terminal 3: build, install, launch
 ```
 
 ## Scripts (run inside `apps/mobile`, or from the root with `-w @fieldops/mobile`)
@@ -31,7 +34,8 @@ npm run mobile:android   # terminal 2: build, install, launch
 ## Stack
 
 React Native 0.87 (New Architecture, Hermes) · TypeScript (strict) · React Navigation 7 ·
-Redux Toolkit + RTK Query · react-native-config · MMKV · NetInfo · Reanimated 4
+Redux Toolkit + RTK Query · react-native-config · MMKV · react-native-keychain · NetInfo ·
+Reanimated 4
 
 ## Layout
 
@@ -43,7 +47,8 @@ apps/mobile/
 │   ├── components/ ui/ primitives, common/ composites
 │   ├── features/   auth, dashboard, jobs, notifications, profile
 │   ├── hooks/      cross-feature hooks
-│   ├── services/   api/ (RTK Query), network/ (NetInfo), storage/ (MMKV)
+│   ├── services/   api/ (RTK Query, refresh), auth/ (credential store), network/ (NetInfo),
+│   │               storage/ (MMKV, Keystore secure storage)
 │   ├── store/      Redux store, slices/
 │   ├── theme/      tokens, light/dark themes
 │   └── utils/      errors, logger, global error handler

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 import type { AppTabScreenProps } from '../../../app/navigation/types';
 import {
@@ -11,8 +11,9 @@ import {
   type SegmentedOption,
 } from '../../../components/ui';
 import { useAppDispatch, useAppSelector } from '../../../store/hooks';
-import { selectSession, signOut } from '../../../store/slices/sessionSlice';
+import { selectSessionUser } from '../../../store/slices/sessionSlice';
 import { useThemePreference, type ThemePreference } from '../../../theme';
+import { signOut } from '../../auth/session';
 import { DiagnosticsCard } from '../components/DiagnosticsCard';
 import { InfoRow } from '../components/InfoRow';
 
@@ -26,21 +27,31 @@ export function ProfileScreen(
   _props: AppTabScreenProps<'Profile'>,
 ): React.JSX.Element {
   const dispatch = useAppDispatch();
-  const session = useAppSelector(selectSession);
+  const user = useAppSelector(selectSessionUser);
   const { preference, setPreference } = useThemePreference();
+  const [signingOut, setSigningOut] = useState(false);
+
+  const handleSignOut = () => {
+    setSigningOut(true);
+    // The session state change unmounts this screen; no need to reset the flag.
+    dispatch(signOut()).catch(() => setSigningOut(false));
+  };
 
   return (
     <Screen>
-      {session.status === 'signedIn' ? (
+      {user !== null ? (
         <Card>
           <AppText variant="label" tone="muted">
             Account
           </AppText>
-          <AppText variant="heading">{session.user.displayName}</AppText>
-          <Badge label={session.user.role} tone="primary" />
+          <AppText variant="heading">
+            {user.firstName} {user.lastName}
+          </AppText>
+          <Badge label={user.role} tone="primary" />
+          <InfoRow label="Email" value={user.email} />
           <InfoRow
-            label="Session"
-            value="Development session (not authenticated)"
+            label="Member since"
+            value={new Date(user.createdAt).toLocaleDateString()}
           />
         </Card>
       ) : null}
@@ -62,7 +73,8 @@ export function ProfileScreen(
       <Button
         label="Sign out"
         variant="danger"
-        onPress={() => dispatch(signOut())}
+        loading={signingOut}
+        onPress={handleSignOut}
       />
     </Screen>
   );

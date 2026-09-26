@@ -210,34 +210,55 @@ transitions, session state and sign-out cache reset, error normalization, the HT
 - The global `fetch` is not allowed. Add an RTK Query endpoint with `baseApi.injectEndpoints()`.
 - `console` is not allowed. Use `logger` from `src/utils/logger.ts`.
 
-## Manual test checklist (Version 1)
+## Run against the local API
 
-Run these on the physical phone after `npm run mobile:android`:
+The app talks to the real API from Version 2. Start the backend first
+([backend-development.md](backend-development.md)):
 
-1. **Launch.** The app opens as **FieldOps Dev** with no red error screen. The login screen
-   shows "FieldOps", a "Sign in" card and a "development build" badge.
-2. **Development entry.** Tap **Continue as Worker**. The tabs Dashboard, Jobs, Notifications
-   and Profile appear. The dashboard greets "Dev Worker" with a WORKER badge.
-3. **Tabs.** Switch between all four tabs. Jobs and Notifications show their empty states.
-   On the Dashboard, **Open Jobs** switches to the Jobs tab.
-4. **Connectivity.** Turn on airplane mode: the "You're offline" banner appears under the
-   header, and the dashboard's Connection badge shows Offline. Turn airplane mode off:
-   "Reconnecting…" may appear briefly, then "Back online" for about 2.5 seconds, then the banner
-   disappears.
-5. **Wi-Fi without internet (optional).** On a network with no internet access the app should
-   report Offline, not Online.
-6. **Theme.** Profile → Appearance: choose Dark, then Light, then System. Colors, headers and the
-   tab bar follow. Close the app completely and reopen it: the choice persists.
-7. **Diagnostics.** Profile → Diagnostics shows Environment `development` and API base URL
-   `http://localhost:3000`. **Check API connection** shows a loading state and then
-   "API not reachable" with a reference ID (correct, because there is no backend until V3).
-8. **Error boundary.** Profile → **Simulate render error** shows the "Something went wrong"
-   screen. In development a LogBox notice also appears. **Try again** returns to the app.
-9. **Sign out.** Profile → **Sign out** returns to the login screen. The Android back button
-   does not return to the tabs.
-10. **Other roles.** Sign in as Manager and as Admin. The dashboard copy changes to "Team's jobs".
-11. **Dark mode from the OS.** With Appearance set to System, switch the phone's dark mode.
-    The app follows.
+```bash
+npm run api:dev          # terminal 1: API on http://localhost:3000
+npm run mobile:reverse   # forward the phone's ports 3000 (API) and 8081 (Metro) over USB
+npm run mobile:start     # terminal 2: Metro
+npm run mobile:android   # terminal 3: build and install (after native dependency changes)
+```
+
+`npm run mobile:android` is required once after pulling Version 2, because it adds a native
+module (`react-native-keychain`). Afterwards, JavaScript changes only need Metro.
+
+## Manual test checklist (Version 2)
+
+Run these on the physical phone with the API running and `adb reverse` active:
+
+1. **Launch.** The app shows "Starting FieldOps…" briefly, then the sign-in screen with a
+   "development build" badge. There is no development entry anymore.
+2. **Validation.** Tap **Sign in** with empty fields: inline messages appear under Email and
+   Password, and no request is sent. Register with a 5-character password: "Use at least 8
+   characters."
+3. **Register.** **Create an account** → fill in the form → **Create account**. The main tabs
+   appear; the dashboard greets you by first name with a WORKER badge.
+4. **Profile.** Profile shows your name, email, WORKER role and "Member since".
+5. **Duplicate email.** Sign out, register again with the same email (any capitalization):
+   "An account with this email already exists."
+6. **Wrong password.** Sign in with a wrong password: "Incorrect email or password."
+7. **Login.** Sign in with the correct password: the tabs appear.
+8. **Restart.** Close the app completely (swipe it away) and reopen it: it opens signed in,
+   without the sign-in screen.
+9. **Offline start.** Enable airplane mode, close and reopen the app: it still opens signed in,
+   with the offline banner. Disable airplane mode.
+10. **Token refresh.** Set `ACCESS_TOKEN_EXPIRATION=1m` in `apps/api/.env` and restart the API.
+    Sign in, wait over a minute, then tap **Check API connection** or reopen the app. It keeps
+    working: the API log shows `POST /api/v1/auth/refresh 200` followed by the retried request.
+    Restore `15m` afterwards.
+11. **Session ended by the server.** Sign in, then revoke the session in the database (or
+    replay an old refresh token from Postman): the next authenticated request returns the app to
+    the sign-in screen with "Your session has ended."
+12. **Logout.** Profile → **Sign out**: the sign-in screen appears. The Android back button
+    does not return to the tabs. Reopening the app shows the sign-in screen. In the database,
+    that session has `revoked_reason = LOGOUT`.
+13. **Server unreachable.** Stop the API and try to sign in: "Can't reach the FieldOps server."
+14. **V1 features.** Tabs, connectivity banner, theme switching (and persistence), diagnostics
+    (**Check API connection** now succeeds) and **Simulate render error** behave as in
+    Version 1.
 
 ## Troubleshooting
 

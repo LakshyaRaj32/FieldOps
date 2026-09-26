@@ -15,8 +15,15 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
+    "api:dev": "npm run start:dev -w @fieldops/api",
+    "api:build": "npm run build -w @fieldops/api",
+    "api:start": "npm run start:prod -w @fieldops/api",
+    "api:test:e2e": "npm run test:e2e -w @fieldops/api",
+    "db:migrate": "npm run db:migrate -w @fieldops/api",
+    "db:deploy": "npm run db:deploy -w @fieldops/api",
     "mobile:start": "npm run start -w @fieldops/mobile",
-    "mobile:android": "npm run android -w @fieldops/mobile"
+    "mobile:android": "npm run android -w @fieldops/mobile",
+    "mobile:reverse": "adb reverse tcp:3000 tcp:3000 && adb reverse tcp:8081 tcp:8081"
   },
   "devDependencies": {
     "eslint": "^9.39.5",

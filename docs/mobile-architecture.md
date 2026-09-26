@@ -1,8 +1,9 @@
 # Mobile Architecture
 
-> Status: **Version 1 implemented** (foundation: project, navigation, state, connectivity, API
-> layer, environments, UI foundation, error handling). Later layers arrive in V2 (auth),
-> V5 (SQLite), V6 (sync), V7 (Kotlin location), V8 (realtime), V9 (push and media) and V14
+> Status: **Versions 1 and 2 implemented** (foundation: project, navigation, state,
+> connectivity, API layer, environments, UI foundation, error handling; V2: real
+> authentication, secure token storage, session restore and token refresh, see
+> [authentication.md](authentication.md#8-mobile-app)). Later layers arrive in V5 (SQLite), V6 (sync), V7 (Kotlin location), V8 (realtime), V9 (push and media) and V14
 > (performance). How to run and develop the app: [mobile-development.md](mobile-development.md).
 
 ## 1. Goals
@@ -46,19 +47,20 @@ apps/mobile/src/
 │   ├── navigation/             Root/Auth/App navigators, param-list types, navigation theme, screen layout
 │   └── providers/              AppProviders (safe area, Redux, theme, error boundary), AppServices
 ├── components/
-│   ├── ui/                     Primitives: AppText, Button, Card, Badge, Screen, SegmentedControl
+│   ├── ui/                     Primitives: AppText, Button, Card, Badge, Screen, SegmentedControl, TextField
 │   └── common/                 App-aware composites: Loading/Error/Empty states, ErrorBoundary, ConnectivityBanner
 ├── features/                   Vertical slices; each owns its screens and feature-local components
-│   ├── auth/                   Login (V1 placeholder with development entry; real sign-in in V2)
+│   ├── auth/                   Login, Register, auth endpoints, session thunks, form validation
 │   ├── dashboard/              Dashboard tab
 │   ├── jobs/                   Jobs tab (placeholder until V4)
 │   ├── notifications/          Notifications tab (placeholder until V9)
 │   └── profile/                Account, theme preference, diagnostics
 ├── hooks/                      Cross-feature hooks (useConnectivity)
 ├── services/                   Infrastructure wrappers; the only code allowed to touch these libraries
-│   ├── api/                    RTK Query base API, base query, request IDs, RTK Query listeners, health endpoint
+│   ├── api/                    RTK Query base API, base query (auth header, refresh), request IDs, listeners, health
+│   ├── auth/                   Credential store (sole owner of tokens), payload checks, session events
 │   ├── network/                Connectivity model (pure) and NetInfo service
-│   └── storage/                MMKV preferences storage with typed keys
+│   └── storage/                MMKV preferences (typed keys); Keystore-backed secure storage (keychain)
 ├── store/                      Redux store, typed hooks
 │   └── slices/                 Application-wide slices: session, connectivity
 ├── theme/                      Tokens, light/dark themes, ThemeProvider, theme preference
@@ -66,8 +68,8 @@ apps/mobile/src/
 ```
 
 **Growth plan.** New infrastructure goes into `services/` (for example `services/db` in V5,
-`services/sync` in V6, `services/native` in V7, `services/realtime` in V8, and secure token
-storage in `services/storage` in V2). Feature data access goes into `features/<feature>/api`
+`services/sync` in V6, `services/native` in V7, `services/realtime` in V8; V2 added
+`services/auth` and secure storage in `services/storage`). Feature data access goes into `features/<feature>/api`
 (RTK Query endpoints injected into the base API) and later `features/<feature>/data` (SQLite
 repositories).
 
@@ -107,7 +109,8 @@ Two additional stores exist for specific purposes:
 
 - **MMKV:** small key-value preferences and flags, typed keys only. V1 stores the theme
   preference (`ui.themePreference`).
-- **Keystore-backed secure storage:** tokens and credentials only (V2).
+- **Keystore-backed secure storage** (`react-native-keychain`, AES-GCM with a Keystore key):
+  the session credentials only, owned by `services/auth/credentialStore.ts` (V2).
 
 ## 5. Data flow
 
@@ -154,11 +157,11 @@ In V1 only the Redux and RTK Query paths exist.
 
 ## 7. Redux Toolkit and RTK Query
 
-**Slices implemented in V1** (`src/store/slices`):
+**Slices** (`src/store/slices`):
 
 | Slice | Contents |
 | --- | --- |
-| `session` | Discriminated union: `signedOut`, or `signedIn` with `{ displayName, role }` and `source: 'development'`. V2 replaces the development source with real sessions. Tokens will never be stored here |
+| `session` | Discriminated union: `restoring` (start-up, reading secure storage), `signedOut` (with an optional reason: `signedOut` or `sessionEnded`), or `signedIn` with the `UserProfile`. **Tokens are never stored here**, not even in actions; see [authentication.md](authentication.md#8-mobile-app) |
 | `connectivity` | Latest status, connection type and reachability; `lastChangedAt`; `recoveringFromOffline` and `restoredAt` so the UI can show "Reconnecting…" and "Back online" |
 | `api` | The RTK Query cache (`baseApi.reducer`) |
 
@@ -204,7 +207,9 @@ RootNavigator (native stack, NavigationContainer themed from the app theme)
   every screen.
 - Param lists are typed (`app/navigation/types.ts`) and registered globally, so
   `useNavigation()` is type-checked.
-- V2 adds Register/ForgotPassword to `AuthNavigator` if needed.
+- `AuthNavigator` has Login and Register (V2). While the session is `restoring`, the root
+  renders a loading screen instead of either navigator, so the sign-in screen never flashes
+  for a signed-in user. Password reset is future work.
 
 **Planned evolution (V4+):** role-specific tabs, for example:
 
@@ -240,8 +245,12 @@ factory that react-native-screens requires.
 
 ## 10. Networking, connectivity and environments
 
-- **One HTTP entry point** (`services/api/baseQuery.ts`). V2 adds the Authorization header and
-  single-flight token refresh on `401` there.
+- **One HTTP entry point** (`services/api/baseQuery.ts`). It adds the `Authorization` header
+  per request, unwraps the `{ success, data }` envelope, and on a `401` to an authenticated
+  request performs one refresh shared by all concurrent requests (single flight), then retries
+  once. A `4xx` from the refresh ends the session; offline or `5xx` keeps it. The base query
+  reaches the credential store through the store's thunk extra argument, so tests inject an
+  in-memory store.
 - **Connectivity** (`services/network`): NetInfo's two facts (connected, internet reachable)
   are folded into one status: `unknown`, `checking` (connected, not yet verified), `online` or
   `offline` (including Wi-Fi without internet). It is a hint for the UI and for triggering work,
@@ -250,7 +259,8 @@ factory that react-native-screens requires.
   react-native-config and are validated at startup (`parseEnv`). An invalid build shows a
   configuration error screen instead of calling the wrong server. Details:
   [mobile-development.md](mobile-development.md#api-environments).
-- Responses from the future backend will be validated at runtime with shared schemas (V3–V4).
+- Auth responses and restored credentials are checked at runtime (`services/auth/contracts.ts`)
+  before the app trusts them. Shared runtime schemas for larger payloads arrive with sync (V6).
 - WebSocket client (V8): authenticated on connect, reconnects with backoff, events validated
   against shared schemas, and events trigger sync rather than directly mutating data.
 
@@ -258,7 +268,7 @@ factory that react-native-screens requires.
 
 | Failure | Handling |
 | --- | --- |
-| API failure (network, timeout, HTTP, unreadable response) | `createBaseQuery` maps it to an `AppError` with a user-safe `message`, optional `status`, Problem Details `code` and `requestId`, and logs it with `logger.warn` |
+| API failure (network, timeout, HTTP, unreadable response) | `createBaseQuery` maps it to an `AppError` with a user-safe `message` (the app's own copy per error `code`; never server text for `5xx`), optional `status`, `code`, field `details` and `requestId`, and logs it with `logger.warn` |
 | Any error shown in the UI | `ErrorState` normalizes any value with `toAppError()`. Technical detail is logged and never shown as the message |
 | Render error | `ErrorBoundary` (inside the theme provider) logs it and shows a recovery screen with "Try again" |
 | Uncaught JavaScript error | `installGlobalErrorHandler()` logs it, then hands it to React Native's default handler (red box in development, crash in release). Errors are never swallowed |
@@ -288,7 +298,8 @@ factory that react-native-screens requires.
   `apps/mobile/.env.*` is compiled into the APK. The files hold public settings only.
 - Release-like builds (staging, release) block cleartext HTTP. Configuration validation also
   requires `https` outside development.
-- Tokens in Keystore-backed secure storage only (V2). No secrets are bundled in the app.
+- Tokens in Keystore-backed secure storage only (V2), never in Redux, MMKV or logs. No secrets
+  are bundled in the app.
 - Local database encryption evaluated in V5 and enforced by V18. Certificate pinning evaluated
   in V18.
 - Logs never contain tokens, passwords or personal data. Crash reports are scrubbed.

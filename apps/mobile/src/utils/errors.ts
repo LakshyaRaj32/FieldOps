@@ -7,6 +7,7 @@
  */
 
 import type { FetchBaseQueryError } from '@reduxjs/toolkit/query';
+import type { ApiErrorCode, ApiErrorDetail } from '@fieldops/types';
 
 export type AppErrorKind =
   | 'network'
@@ -22,8 +23,10 @@ export interface AppError {
   readonly message: string;
   /** HTTP status for `http` errors. */
   readonly status?: number;
-  /** Stable machine-readable code from an RFC 9457 Problem Details body, when present. */
+  /** Stable machine-readable code from the API error envelope, when present. */
   readonly code?: string;
+  /** Per-field validation problems (VALIDATION_ERROR), for showing next to form fields. */
+  readonly details?: readonly ApiErrorDetail[];
   /** Correlates the error with server logs (sent as X-Request-Id). */
   readonly requestId?: string;
   /** Technical detail for logs; never shown as the primary message. */
@@ -39,9 +42,34 @@ const MESSAGES = {
   unexpected: 'Something went wrong. Please try again.',
 } as const;
 
+const SESSION_ENDED = 'Your session has expired. Please sign in again.';
+
+/**
+ * User-facing copy for API error codes. The app owns its wording: server messages are
+ * never shown directly, so a server change can't put technical text in front of users.
+ */
+const CODE_MESSAGES: Partial<Record<ApiErrorCode, string>> = {
+  INVALID_CREDENTIALS: 'Incorrect email or password.',
+  EMAIL_ALREADY_REGISTERED:
+    'An account with this email already exists. Try signing in instead.',
+  ACCOUNT_DISABLED:
+    'This account has been disabled. Contact your administrator.',
+  VALIDATION_ERROR: 'Some fields are missing or invalid.',
+  UNAUTHENTICATED: SESSION_ENDED,
+  ACCESS_TOKEN_EXPIRED: SESSION_ENDED,
+  ACCESS_TOKEN_INVALID: SESSION_ENDED,
+  REFRESH_TOKEN_INVALID: SESSION_ENDED,
+  REFRESH_TOKEN_REUSED:
+    'For your security you were signed out. Please sign in again.',
+  SESSION_REVOKED: 'You were signed out. Please sign in again.',
+  SESSION_EXPIRED: SESSION_ENDED,
+  FORBIDDEN: "You don't have permission to do that.",
+  NOT_FOUND: 'The requested item could not be found.',
+};
+
 function messageForStatus(status: number): string {
   if (status === 401) {
-    return 'Your session has expired. Please sign in again.';
+    return SESSION_ENDED;
   }
   if (status === 403) {
     return "You don't have permission to do that.";
@@ -70,6 +98,34 @@ function readString(
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
 
+function readRecord(
+  record: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
+  const value = record[key];
+  return isRecord(value) ? value : undefined;
+}
+
+function readDetails(
+  record: Record<string, unknown>,
+): readonly ApiErrorDetail[] | undefined {
+  const { details: value } = record;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const details = value.flatMap(item => {
+    if (!isRecord(item)) {
+      return [];
+    }
+    const field = readString(item, 'field');
+    const message = readString(item, 'message');
+    return field !== undefined && message !== undefined
+      ? [{ field, message }]
+      : [];
+  });
+  return details.length > 0 ? details : undefined;
+}
+
 /** Builds an AppError, omitting undefined optional fields (exactOptionalPropertyTypes). */
 function makeError(
   kind: AppErrorKind,
@@ -77,6 +133,7 @@ function makeError(
   extras: {
     status?: number | undefined;
     code?: string | undefined;
+    details?: readonly ApiErrorDetail[] | undefined;
     requestId?: string | undefined;
     detail?: string | undefined;
   } = {},
@@ -86,6 +143,7 @@ function makeError(
     message,
     ...(extras.status !== undefined && { status: extras.status }),
     ...(extras.code !== undefined && { code: extras.code }),
+    ...(extras.details !== undefined && { details: extras.details }),
     ...(extras.requestId !== undefined && { requestId: extras.requestId }),
     ...(extras.detail !== undefined && { detail: extras.detail }),
   };
@@ -133,14 +191,19 @@ export function fromFetchBaseQueryError(
   requestId?: string,
 ): AppError {
   if (typeof error.status === 'number') {
-    // Prefer the server's Problem Details (RFC 9457) when it provides a readable message.
-    const body = isRecord(error.data) ? error.data : undefined;
-    const serverMessage =
-      body && (readString(body, 'detail') ?? readString(body, 'title'));
-    return makeError('http', serverMessage ?? messageForStatus(error.status), {
+    // The API error envelope: { success: false, error: { code, message, details, requestId } }.
+    const envelope = isRecord(error.data)
+      ? readRecord(error.data, 'error')
+      : undefined;
+    const code = envelope && readString(envelope, 'code');
+    const knownMessage =
+      code !== undefined ? CODE_MESSAGES[code as ApiErrorCode] : undefined;
+    return makeError('http', knownMessage ?? messageForStatus(error.status), {
       status: error.status,
-      code: body && readString(body, 'code'),
-      requestId,
+      code,
+      details: envelope && readDetails(envelope),
+      requestId: (envelope && readString(envelope, 'requestId')) ?? requestId,
+      detail: envelope && readString(envelope, 'message'),
     });
   }
 
@@ -195,4 +258,17 @@ export function toAppError(error: unknown): AppError {
 
 export function configError(detail: string): AppError {
   return makeError('config', MESSAGES.config, { detail });
+}
+
+/** A successful response whose body is not what the app expected. */
+export function parseError(detail: string, requestId?: string): AppError {
+  return makeError('parse', MESSAGES.parse, { detail, requestId });
+}
+
+/** The first server-reported problem for a form field, if any. */
+export function fieldError(
+  error: AppError | undefined,
+  field: string,
+): string | undefined {
+  return error?.details?.find(detail => detail.field === field)?.message;
 }
