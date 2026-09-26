@@ -14,7 +14,11 @@ import { useAppDispatch, useAppSelector } from '../../../store/hooks';
 import { selectSession } from '../../../store/slices/sessionSlice';
 import { logger } from '../../../utils/logger';
 import { createApiTransport } from './apiTransport';
-import { OfflineJobsContext, type OfflineJobs } from './OfflineJobsContext';
+import {
+  OfflineJobsContext,
+  OfflineJobsErrorContext,
+  type OfflineJobs,
+} from './OfflineJobsContext';
 import { openOfflineSession, type OfflineSession } from './offlineSession';
 import type { SyncStatus } from './syncEngine';
 
@@ -45,6 +49,7 @@ export function OfflineJobsProvider({
 
   const [offline, setOffline] = useState<OfflineSession | null>(null);
   const [status, setStatus] = useState<SyncStatus | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
 
   useEffect(() => {
     const me = workerRef.current;
@@ -60,21 +65,25 @@ export function OfflineJobsProvider({
       openNitroDatabase,
       createApiTransport(dispatch),
     )
-      .then(session_ => {
+      .then(created => {
         if (!active) {
-          session_.release().catch(() => undefined);
+          created.release().catch(() => undefined);
           return;
         }
-        opened = session_;
-        unsubscribe = session_.engine.subscribe(setStatus);
-        setStatus(session_.engine.status());
-        setOffline(session_);
-        session_.engine.sync().catch(() => undefined);
+        opened = created;
+        unsubscribe = created.engine.subscribe(setStatus);
+        setUnavailable(false);
+        setStatus(created.engine.status());
+        setOffline(created);
+        created.engine.sync().catch(() => undefined);
       })
       .catch((error: unknown) => {
         logger.error('Could not open the local database', {
           error: error instanceof Error ? error.message : String(error),
         });
+        if (active) {
+          setUnavailable(true);
+        }
       });
 
     return () => {
@@ -82,6 +91,7 @@ export function OfflineJobsProvider({
       unsubscribe();
       setOffline(null);
       setStatus(null);
+      setUnavailable(false);
       if (opened !== null) {
         // An explicit sign-out removes the local data, unless something is still unsynced.
         const now = sessionRef.current;
@@ -122,8 +132,10 @@ export function OfflineJobsProvider({
   );
 
   return (
-    <OfflineJobsContext.Provider value={value}>
-      {children}
-    </OfflineJobsContext.Provider>
+    <OfflineJobsErrorContext.Provider value={unavailable}>
+      <OfflineJobsContext.Provider value={value}>
+        {children}
+      </OfflineJobsContext.Provider>
+    </OfflineJobsErrorContext.Provider>
   );
 }

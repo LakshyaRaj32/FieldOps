@@ -2,7 +2,10 @@ import React from 'react';
 
 import { AppText } from '../../../components/ui';
 import { useTheme, type AppTheme } from '../../../theme';
-import { useOfflineJobs } from '../data/OfflineJobsContext';
+import {
+  useOfflineJobs,
+  useOfflineJobsUnavailable,
+} from '../data/OfflineJobsContext';
 import { describeSync, type SyncBanner } from '../presentation';
 
 function colors(theme: AppTheme, tone: SyncBanner['tone']) {
@@ -42,7 +45,14 @@ function colors(theme: AppTheme, tone: SyncBanner['tone']) {
 export function SyncStatusBanner(): React.JSX.Element | null {
   const theme = useTheme();
   const offline = useOfflineJobs();
-  const banner = describeSync(offline?.status ?? null);
+  const unavailable = useOfflineJobsUnavailable();
+  const banner: SyncBanner | null = unavailable
+    ? {
+        message:
+          "Your jobs can't be stored on this phone right now. Restart the app; if it keeps happening, contact support.",
+        tone: 'danger',
+      }
+    : describeSync(offline?.status ?? null);
   if (banner === null) {
     return null;
   }

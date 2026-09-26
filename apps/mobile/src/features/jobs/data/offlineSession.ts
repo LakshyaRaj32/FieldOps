@@ -19,6 +19,13 @@ export interface OfflineSession {
   release(options?: { readonly discardIfSynced?: boolean }): Promise<void>;
 }
 
+/**
+ * The database file allows one open connection. A new session waits until the previous one
+ * is fully released (it may be waiting for a sync cycle), for example after a quick sign-out
+ * and sign-in.
+ */
+let previousRelease: Promise<void> = Promise.resolve();
+
 /** One database file per user: another user signing in on the device never sees it. */
 export const databaseNameFor = (userId: string) => `fieldops-${userId}.sqlite`;
 
@@ -27,6 +34,7 @@ export async function openOfflineSession(
   openDatabase: (name: string) => SqlDatabase,
   transport: JobSyncTransport,
 ): Promise<OfflineSession> {
+  await previousRelease;
   const db = openDatabase(databaseNameFor(me.id));
   try {
     // Before anything reads: a failed migration leaves the previous version intact.
@@ -41,18 +49,22 @@ export async function openOfflineSession(
   return {
     store,
     engine,
-    async release({ discardIfSynced = false } = {}) {
-      engine.dispose();
-      // The connection cannot close while a cycle is still using it.
-      await engine.whenIdle();
-      const counts = await store.counts();
-      const clean =
-        counts.pending === 0 && counts.failed === 0 && counts.conflicts === 0;
-      if (discardIfSynced && clean) {
-        db.destroy();
-      } else {
-        db.close();
-      }
+    release({ discardIfSynced = false } = {}) {
+      const releasing = (async () => {
+        engine.dispose();
+        // The connection cannot close while a cycle is still using it.
+        await engine.whenIdle();
+        const counts = await store.counts();
+        const clean =
+          counts.pending === 0 && counts.failed === 0 && counts.conflicts === 0;
+        if (discardIfSynced && clean) {
+          db.destroy();
+        } else {
+          db.close();
+        }
+      })();
+      previousRelease = releasing.catch(() => undefined);
+      return releasing;
     },
   };
 }

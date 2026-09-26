@@ -20,6 +20,13 @@ export function useOfflineJobs(): OfflineJobs | null {
   return useContext(OfflineJobsContext);
 }
 
+/** Set when the worker's local database could not be opened (shown by the sync banner). */
+export const OfflineJobsErrorContext = createContext<boolean>(false);
+
+export function useOfflineJobsUnavailable(): boolean {
+  return useContext(OfflineJobsErrorContext);
+}
+
 export interface LocalQuery<Result> {
   readonly data: Result | undefined;
   readonly error: unknown;

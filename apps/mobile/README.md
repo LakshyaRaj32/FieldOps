@@ -5,9 +5,11 @@ The FieldOps React Native application for Android. It serves both field workers 
 **Status:** Phase 2 (Core Product). On top of the Phase 1 foundation (navigation, state
 management, the API layer, connectivity, environment configuration, UI and theme, error
 handling, real authentication with Keystore-backed tokens, session restore and refresh), the
-app has jobs: workers see their jobs and start and complete them; managers create, edit and
-assign jobs and monitor their status. Offline storage and sync arrive in Phase 3
-([phase status](../../docs/phase-status.md)).
+app has jobs (Phase 2) and works offline for workers (Phase 3): jobs are kept in SQLite,
+start / complete / field notes work without a connection and survive restarts, and a sync
+engine delivers them exactly once when the connection returns. Managers create, edit and
+assign jobs online ([phase status](../../docs/phase-status.md),
+[offline-first](../../docs/offline-first.md)).
 
 ## Quick start
 
