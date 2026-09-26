@@ -35,6 +35,12 @@ export const JobErrors = {
       ErrorCode.INVALID_ASSIGNEE,
       "The selected worker doesn't exist or can't be assigned jobs.",
     ),
+  idempotencyKeyReused: () =>
+    new AppException(
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      ErrorCode.IDEMPOTENCY_KEY_REUSED,
+      'This request ID was already used for a different request.',
+    ),
   versionConflict: () =>
     new AppException(
       HttpStatus.CONFLICT,

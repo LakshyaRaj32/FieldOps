@@ -24,6 +24,7 @@ export const JobAction = {
   EDIT: 'edit',
   CANCEL: 'cancel',
   DELETE: 'delete',
+  NOTE: 'note',
 } as const;
 
 export type JobAction = (typeof JobAction)[keyof typeof JobAction];

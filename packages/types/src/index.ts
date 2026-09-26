@@ -1,6 +1,7 @@
 export { Role } from './role';
 export { JobAction, JobEventType, JobPriority, JobStatus } from './jobs';
 export type {
+  AddJobNoteRequest,
   AssignJobRequest,
   CancelJobRequest,
   CreateJobRequest,
@@ -8,8 +9,10 @@ export type {
   JobChecklistItem,
   JobDetail,
   JobHistoryEntry,
+  JobNote,
   JobPage,
   JobSummary,
+  JobWorkingSet,
   UpdateJobRequest,
   UserSummary,
   WorkerSummary,

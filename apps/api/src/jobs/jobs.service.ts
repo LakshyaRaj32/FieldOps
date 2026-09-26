@@ -7,11 +7,16 @@ import { Role } from '../users/role.js';
 import { UsersService } from '../users/users.service.js';
 import { decodeJobCursor, encodeJobCursor } from './data/job-cursor.js';
 import {
+  DuplicateMutationError,
   JobsRepository,
+  NoteIdTakenError,
   type JobDetailRecord,
   type JobEventInput,
   type JobFieldChanges,
+  type JobOperation,
+  type MutationRecord,
 } from './data/jobs.repository.js';
+import type { ProcessedMutation } from '../generated/prisma/client.js';
 import {
   decideTransition,
   isChecklistEditable,
@@ -25,12 +30,14 @@ import {
   isPermitted,
   type JobPermission,
 } from './domain/job.policy.js';
+import type { AddJobNoteDto } from './dto/job-command.dto.js';
 import type { CreateJobDto } from './dto/create-job.dto.js';
 import type { ListJobsQueryDto } from './dto/list-jobs-query.dto.js';
 import {
   JobDetailDto,
   JobPageDto,
   JobSummaryDto,
+  JobWorkingSetDto,
 } from './dto/job-response.dto.js';
 import type { UpdateJobDto } from './dto/update-job.dto.js';
 import {
@@ -42,6 +49,11 @@ import {
 import { JobErrors } from './job.errors.js';
 
 const DEFAULT_PAGE_SIZE = 20;
+
+/** Closed jobs stay in a worker's offline working set this long after their last change. */
+const WORKING_SET_CLOSED_DAYS = 7;
+/** Upper bound on the working set (far above a worker's realistic open jobs). */
+const WORKING_SET_LIMIT = 200;
 
 /** Past participles for "A job that is completed can't be started." */
 const TRANSITION_VERBS: Readonly<Record<JobTransition, string>> = {
@@ -151,6 +163,28 @@ export class JobsService {
     });
   }
 
+  /**
+   * Everything the worker's device keeps offline, as one snapshot. The device replaces its
+   * copy with it, so a job that disappears here (reassigned, or closed long ago) leaves the
+   * device once its pending changes have been resolved.
+   */
+  async workingSet(user: AuthenticatedUser): Promise<JobWorkingSetDto> {
+    this.assertPermission(user, 'job:read:assigned');
+    const generatedAt = new Date();
+    const closedSince = new Date(
+      generatedAt.getTime() - WORKING_SET_CLOSED_DAYS * 86_400_000,
+    );
+    const jobs = await this.jobs.workingSet(
+      user.userId,
+      closedSince,
+      WORKING_SET_LIMIT,
+    );
+    return Object.assign(new JobWorkingSetDto(), {
+      jobs: jobs.map(job => JobDetailDto.from(job, user)),
+      generatedAt: generatedAt.toISOString(),
+    });
+  }
+
   async get(user: AuthenticatedUser, id: string): Promise<JobDetailDto> {
     return JobDetailDto.from(await this.loadVisible(user, id), user);
   }
@@ -228,22 +262,97 @@ export class JobsService {
     });
   }
 
-  start(user: AuthenticatedUser, id: string): Promise<JobDetailDto> {
-    return this.transition(user, id, 'start', {
-      prepare: async () => ({
-        eventType: JobEventType.STARTED,
-        fields: { startedAt: new Date() },
-      }),
-    });
+  /** The assigned worker starts the job. Retries with the same idempotency key are replays. */
+  start(
+    user: AuthenticatedUser,
+    id: string,
+    idempotencyKey?: string,
+  ): Promise<JobDetailDto> {
+    return this.idempotent(
+      user,
+      idempotencyKey,
+      'job.start',
+      id,
+      200,
+      mutation =>
+        this.transition(user, id, 'start', {
+          prepare: async () => ({
+            eventType: JobEventType.STARTED,
+            fields: { startedAt: new Date() },
+          }),
+          ...(mutation !== undefined && { mutation }),
+        }),
+    );
   }
 
-  complete(user: AuthenticatedUser, id: string): Promise<JobDetailDto> {
-    return this.transition(user, id, 'complete', {
-      prepare: async () => ({
-        eventType: JobEventType.COMPLETED,
-        fields: { completedAt: new Date() },
-      }),
-    });
+  /** The assigned worker completes the job. Retries with the same key are replays. */
+  complete(
+    user: AuthenticatedUser,
+    id: string,
+    idempotencyKey?: string,
+  ): Promise<JobDetailDto> {
+    return this.idempotent(
+      user,
+      idempotencyKey,
+      'job.complete',
+      id,
+      200,
+      mutation =>
+        this.transition(user, id, 'complete', {
+          prepare: async () => ({
+            eventType: JobEventType.COMPLETED,
+            fields: { completedAt: new Date() },
+          }),
+          ...(mutation !== undefined && { mutation }),
+        }),
+    );
+  }
+
+  /**
+   * The assigned worker adds a field note, on a job in any status. Notes are append-only, so
+   * they never conflict. The note ID comes from the device and makes the command idempotent
+   * even without an idempotency key.
+   */
+  addNote(
+    user: AuthenticatedUser,
+    id: string,
+    dto: AddJobNoteDto,
+    idempotencyKey?: string,
+  ): Promise<JobDetailDto> {
+    return this.idempotent(
+      user,
+      idempotencyKey,
+      'job.note.add',
+      id,
+      201,
+      async mutation => {
+        const job = await this.loadVisible(user, id);
+        this.assertPermitted(user, job, JobAction.NOTE);
+        try {
+          const updated = await this.jobs.addNote(
+            id,
+            {
+              id: dto.id,
+              authorId: user.userId,
+              body: dto.body,
+              occurredAt: new Date(dto.occurredAt),
+            },
+            mutation,
+          );
+          return JobDetailDto.from(updated, user);
+        } catch (error) {
+          if (!(error instanceof NoteIdTakenError)) {
+            throw error;
+          }
+          // The same note sent again: nothing to do. Another note's ID: refuse.
+          const existing = await this.jobs.findNote(dto.id);
+          if (existing?.jobId === id && existing.authorId === user.userId) {
+            return JobDetailDto.from(await this.loadVisible(user, id), user);
+          }
+          throw JobErrors.idempotencyKeyReused();
+        }
+      },
+    );
   }
 
   cancel(
@@ -270,6 +379,8 @@ export class JobsService {
     options: {
       readonly sameAssignee?: (job: JobDetailRecord) => boolean;
       readonly prepare: () => Promise<TransitionPlan>;
+      /** Idempotency record, written in the same transaction as the change. */
+      readonly mutation?: MutationRecord;
     },
   ): Promise<JobDetailDto> {
     const job = await this.loadVisible(user, id);
@@ -279,6 +390,16 @@ export class JobsService {
       sameAssignee: options.sameAssignee?.(job) ?? false,
     });
     if (decision.kind === 'alreadyApplied') {
+      if (options.mutation !== undefined) {
+        // Remember the key, so a retry of it is a replay even after the job moves on.
+        await this.jobs
+          .recordMutation(options.mutation)
+          .catch((error: unknown) => {
+            if (!(error instanceof DuplicateMutationError)) {
+              throw error;
+            }
+          });
+      }
       return JobDetailDto.from(job, user);
     }
     if (decision.kind === 'rejected') {
@@ -299,11 +420,75 @@ export class JobsService {
     const updated = await this.jobs.update(id, job.version, {
       fields: { ...plan.fields, status: decision.to },
       event,
+      ...(options.mutation !== undefined && { mutation: options.mutation }),
     });
     if (updated === null) {
       throw JobErrors.versionConflict();
     }
     return JobDetailDto.from(updated, user);
+  }
+
+  /**
+   * Server-side idempotency for device commands (`Idempotency-Key`). The device reuses one
+   * key for every attempt of a command, so an attempt whose response was lost comes back
+   * with a key that is already recorded: it is answered from the record, never applied twice.
+   *
+   * - Key already recorded: replay (same command and job required).
+   * - Two attempts at once: the database's primary key lets one record it; the other
+   *   replays.
+   * - No key: the command runs as a plain request (online clients, Swagger).
+   */
+  private async idempotent(
+    user: AuthenticatedUser,
+    idempotencyKey: string | undefined,
+    operation: JobOperation,
+    jobId: string,
+    responseStatus: number,
+    run: (mutation: MutationRecord | undefined) => Promise<JobDetailDto>,
+  ): Promise<JobDetailDto> {
+    if (idempotencyKey === undefined) {
+      return run(undefined);
+    }
+    const earlier = await this.jobs.findMutation(user.userId, idempotencyKey);
+    if (earlier !== null) {
+      return this.replay(user, earlier, operation, jobId);
+    }
+    try {
+      return await run({
+        userId: user.userId,
+        idempotencyKey,
+        operation,
+        jobId,
+        responseStatus,
+      });
+    } catch (error) {
+      if (error instanceof DuplicateMutationError) {
+        const winner = await this.jobs.findMutation(
+          user.userId,
+          idempotencyKey,
+        );
+        if (winner !== null) {
+          return this.replay(user, winner, operation, jobId);
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Answers a repeated command with the job as it is now. The command succeeded earlier; the
+   * device converges to the current server state, which may already include later changes.
+   */
+  private async replay(
+    user: AuthenticatedUser,
+    earlier: ProcessedMutation,
+    operation: JobOperation,
+    jobId: string,
+  ): Promise<JobDetailDto> {
+    if (earlier.operation !== operation || earlier.jobId !== jobId) {
+      throw JobErrors.idempotencyKeyReused();
+    }
+    return JobDetailDto.from(await this.loadVisible(user, jobId), user);
   }
 
   /** The job, if it exists and the caller may see it; otherwise 404 either way. */

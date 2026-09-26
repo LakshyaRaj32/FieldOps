@@ -82,10 +82,11 @@ describe('isPermitted', () => {
 
 describe('allowedActions', () => {
   it.each([
-    [JobStatus.ASSIGNED, ['start']],
-    [JobStatus.IN_PROGRESS, ['complete']],
-    [JobStatus.COMPLETED, []],
-    [JobStatus.CANCELLED, []],
+    [JobStatus.ASSIGNED, ['start', 'note']],
+    [JobStatus.IN_PROGRESS, ['complete', 'note']],
+    // Field notes stay possible on closed jobs; nothing else does.
+    [JobStatus.COMPLETED, ['note']],
+    [JobStatus.CANCELLED, ['note']],
   ] as const)(
     'offers the assigned worker on a %s job: %j',
     (status, actions) => {

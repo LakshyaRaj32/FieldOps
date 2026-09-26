@@ -3,7 +3,9 @@ import type {
   JobChecklistItem,
   JobDetail,
   JobHistoryEntry,
+  JobNote,
   JobPage,
+  JobWorkingSet,
   JobSummary,
   UserSummary,
 } from '@fieldops/types';
@@ -149,6 +151,29 @@ export class JobHistoryEntryDto implements JobHistoryEntry {
   readonly createdAt: string;
 }
 
+export class JobNoteDto implements JobNote {
+  @ApiProperty({ format: 'uuid' })
+  readonly id: string;
+
+  @ApiProperty({ example: 'Compressor replaced.' })
+  readonly body: string;
+
+  @ApiProperty({ type: UserSummaryDto })
+  readonly author: UserSummaryDto;
+
+  @ApiProperty({
+    format: 'date-time',
+    description: 'Device time of capture (informational).',
+  })
+  readonly occurredAt: string;
+
+  @ApiProperty({
+    format: 'date-time',
+    description: 'Server receipt time (authoritative order).',
+  })
+  readonly createdAt: string;
+}
+
 export class JobDetailDto extends JobSummaryDto implements JobDetail {
   @ApiProperty({ type: String, nullable: true })
   readonly description: string | null;
@@ -183,6 +208,12 @@ export class JobDetailDto extends JobSummaryDto implements JobDetail {
   @ApiProperty({ type: [JobHistoryEntryDto], description: 'Oldest first.' })
   readonly history: JobHistoryEntryDto[];
 
+  @ApiProperty({
+    type: [JobNoteDto],
+    description: 'Worker field notes, in the order the server received them.',
+  })
+  readonly fieldNotes: JobNoteDto[];
+
   static override from(
     job: JobDetailRecord,
     user: AuthenticatedUser,
@@ -216,6 +247,13 @@ export class JobDetailDto extends JobSummaryDto implements JobDetail {
           event.assignee === null ? null : UserSummaryDto.from(event.assignee),
         createdAt: event.createdAt.toISOString(),
       })),
+      fieldNotes: job.fieldNotes.map(note => ({
+        id: note.id,
+        body: note.body,
+        author: UserSummaryDto.from(note.author),
+        occurredAt: note.occurredAt.toISOString(),
+        createdAt: note.createdAt.toISOString(),
+      })),
     } satisfies JobDetail);
   }
 }
@@ -230,4 +268,16 @@ export class JobPageDto implements JobPage {
     description: 'Pass as `cursor` for the next page; null on the last page.',
   })
   readonly nextCursor: string | null;
+}
+
+export class JobWorkingSetDto implements JobWorkingSet {
+  @ApiProperty({
+    type: [JobDetailDto],
+    description:
+      'Open jobs assigned to the caller, plus jobs closed in the last 7 days (at most 200).',
+  })
+  readonly jobs: JobDetailDto[];
+
+  @ApiProperty({ format: 'date-time' })
+  readonly generatedAt: string;
 }

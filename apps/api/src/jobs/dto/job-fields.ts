@@ -36,6 +36,7 @@ export const JOB_LIMITS = {
   checklistItems: 50,
   checklistItem: 200,
   cancellationReason: 500,
+  note: 2000,
 } as const;
 
 /**
@@ -80,6 +81,24 @@ export function ScheduledAtField(required: boolean): PropertyDecorator {
     // Without an offset the instant would depend on the server's time zone.
     Matches(/(Z|[+-]\d{2}:\d{2})$/, {
       message: 'Scheduled time must include a time zone (Z or +hh:mm).',
+    }),
+  );
+}
+
+/** When something happened on the device. Stored as given: device clocks are informational. */
+export function OccurredAtField(): PropertyDecorator {
+  return applyDecorators(
+    ApiProperty({
+      format: 'date-time',
+      example: '2026-09-27T10:42:00+05:30',
+      description: 'Device time with a time zone offset or Z.',
+    }),
+    IsISO8601(
+      { strict: true },
+      { message: 'Occurred at must be an ISO 8601 date-time.' },
+    ),
+    Matches(/(Z|[+-]\d{2}:\d{2})$/, {
+      message: 'Occurred at must include a time zone (Z or +hh:mm).',
     }),
   );
 }

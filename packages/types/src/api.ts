@@ -38,6 +38,8 @@ export type ApiErrorCode =
   | 'INVALID_ASSIGNEE'
   /** The resource changed since the client read it: refetch and retry. */
   | 'VERSION_CONFLICT'
+  /** The Idempotency-Key (or client-generated ID) was already used for a different request. */
+  | 'IDEMPOTENCY_KEY_REUSED'
   | 'PAYLOAD_TOO_LARGE'
   | 'INTERNAL_ERROR'
   | 'SERVICE_UNAVAILABLE';

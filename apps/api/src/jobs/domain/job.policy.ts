@@ -26,7 +26,8 @@ export type JobPermission =
   | 'job:assign'
   | 'job:cancel'
   | 'job:delete'
-  | 'job:work';
+  | 'job:work'
+  | 'job:note';
 
 const MANAGERS: readonly Role[] = [Role.MANAGER, Role.ADMIN];
 const WORKERS: readonly Role[] = [Role.WORKER];
@@ -42,6 +43,8 @@ export const JOB_PERMISSIONS: Readonly<Record<JobPermission, readonly Role[]>> =
     'job:delete': MANAGERS,
     // Starting and completing is field work: only the assigned worker does it.
     'job:work': WORKERS,
+    // Field notes come from the assigned worker too.
+    'job:note': WORKERS,
   };
 
 /** The permission each action on an existing job requires. */
@@ -52,6 +55,7 @@ export const ACTION_PERMISSION: Readonly<Record<JobAction, JobPermission>> = {
   [JobAction.EDIT]: 'job:edit',
   [JobAction.CANCEL]: 'job:cancel',
   [JobAction.DELETE]: 'job:delete',
+  [JobAction.NOTE]: 'job:note',
 };
 
 /** Roles holding a permission: for @Roles() route gates. */
@@ -98,12 +102,18 @@ export function statusAllows(status: JobStatus, action: JobAction): boolean {
       return isEditable(status);
     case JobAction.DELETE:
       return isDeletable(status);
+    case JobAction.NOTE:
+      // Evidence is always welcome, also on a closed job ("found a leak after finishing").
+      return true;
   }
 }
 
+/** Permissions that only the job's assigned worker may use on it. */
+const ASSIGNEE_ONLY: readonly JobPermission[] = ['job:work', 'job:note'];
+
 /**
  * Whether the user holds the permission for the action AND stands in the right relationship
- * to the job (work actions: the job must be assigned to them). Status is checked separately
+ * to the job (work actions and notes: the job must be assigned to them). Status is checked separately
  * so the service can tell "not allowed" (403) from "not now" (409).
  */
 export function isPermitted(
@@ -115,12 +125,15 @@ export function isPermitted(
   if (!hasPermission(user.role, permission) || !canView(user, job)) {
     return false;
   }
-  return permission !== 'job:work' || job.assignedWorkerId === user.userId;
+  return (
+    !ASSIGNEE_ONLY.includes(permission) || job.assignedWorkerId === user.userId
+  );
 }
 
 const ACTION_ORDER: readonly JobAction[] = [
   JobAction.START,
   JobAction.COMPLETE,
+  JobAction.NOTE,
   JobAction.ASSIGN,
   JobAction.EDIT,
   JobAction.CANCEL,

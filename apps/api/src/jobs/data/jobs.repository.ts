@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 
 import { PrismaService } from '../../database/prisma.service.js';
-import { Prisma } from '../../generated/prisma/client.js';
+import {
+  Prisma,
+  type ProcessedMutation,
+} from '../../generated/prisma/client.js';
 import type { JobEventType, JobStatus } from '../job-enums.js';
 import type { JobCursor } from './job-cursor.js';
 
@@ -20,6 +23,10 @@ const detailInclude = {
   events: {
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     include: { actor: userSummary, assignee: userSummary },
+  },
+  fieldNotes: {
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    include: { author: userSummary },
   },
 } as const satisfies Prisma.JobInclude;
 
@@ -52,14 +59,53 @@ export type JobFieldChanges = Omit<
   'id' | 'version' | 'createdAt' | 'updatedAt' | 'createdById'
 >;
 
+/** Commands a device may send with an Idempotency-Key. */
+export type JobOperation = 'job.start' | 'job.complete' | 'job.note.add';
+
+/** What is recorded about a processed command, in the command's own transaction. */
+export interface MutationRecord {
+  readonly userId: string;
+  readonly idempotencyKey: string;
+  readonly operation: JobOperation;
+  readonly jobId: string;
+  readonly responseStatus: number;
+}
+
+export interface NoteInput {
+  readonly id: string;
+  readonly authorId: string;
+  readonly body: string;
+  readonly occurredAt: Date;
+}
+
+/** The Idempotency-Key was recorded by a concurrent request first: replay that one. */
+export class DuplicateMutationError extends Error {
+  override readonly name = 'DuplicateMutationError';
+}
+
+/** A note with this (device-generated) ID already exists. */
+export class NoteIdTakenError extends Error {
+  override readonly name = 'NoteIdTakenError';
+}
+
+/** Internal: aborts a transaction whose compare-and-set lost the race. */
+class StaleVersion extends Error {}
+
+const isUniqueViolation = (error: unknown): boolean =>
+  error instanceof Prisma.PrismaClientKnownRequestError &&
+  error.code === 'P2002';
+
+type Tx = Prisma.TransactionClient;
+
 /**
- * Owns the `jobs`, `job_checklist_items` and `job_events` tables: the only code in the API
- * that queries them (docs/backend-architecture.md, "Inside a module").
+ * Owns the `jobs`, `job_checklist_items`, `job_events`, `job_notes` and `processed_mutations`
+ * tables: the only code in the API that queries them (docs/backend-architecture.md, "Inside a
+ * module").
  *
  * Every change is a compare-and-set on `version`: the UPDATE only matches the row version the
  * service decided on, so two concurrent commands can never both apply (for example a worker
  * starting a job while a manager reassigns it). The loser gets `null` and reports a conflict.
- * Each change and its history event are written in one transaction.
+ * Each change, its history event and its idempotency record are written in one transaction.
  */
 @Injectable()
 export class JobsRepository {
@@ -104,6 +150,32 @@ export class JobsRepository {
     };
   }
 
+  /**
+   * A worker's offline working set: their open jobs, plus jobs closed since `closedSince`.
+   * Served by jobs_assigned_worker_id_scheduled_at_idx.
+   */
+  workingSet(
+    workerId: string,
+    closedSince: Date,
+    limit: number,
+  ): Promise<JobDetailRecord[]> {
+    return this.prisma.job.findMany({
+      where: {
+        assignedWorkerId: workerId,
+        OR: [
+          { status: { in: ['ASSIGNED', 'IN_PROGRESS'] } },
+          {
+            status: { in: ['COMPLETED', 'CANCELLED'] },
+            updatedAt: { gte: closedSince },
+          },
+        ],
+      },
+      include: detailInclude,
+      orderBy: [{ scheduledAt: 'asc' }, { id: 'asc' }],
+      take: limit,
+    });
+  }
+
   async create(
     data: Omit<
       Prisma.JobUncheckedCreateInput,
@@ -127,8 +199,11 @@ export class JobsRepository {
   }
 
   /**
-   * Applies field changes (and optionally a new checklist and a history event) if the job is
-   * still at `expectedVersion`. Returns the updated job, or null if it changed meanwhile.
+   * Applies field changes (and optionally a new checklist, a history event and the command's
+   * idempotency record) if the job is still at `expectedVersion`. Returns the updated job, or
+   * null if it changed meanwhile.
+   *
+   * @throws DuplicateMutationError when a concurrent request recorded the same key first.
    */
   async update(
     id: string,
@@ -137,35 +212,98 @@ export class JobsRepository {
       readonly fields: JobFieldChanges;
       readonly checklist?: readonly string[];
       readonly event?: JobEventInput;
+      readonly mutation?: MutationRecord;
     },
   ): Promise<JobDetailRecord | null> {
-    const applied = await this.prisma.$transaction(async tx => {
-      const { count } = await tx.job.updateMany({
-        where: { id, version: expectedVersion },
-        data: { ...changes.fields, version: { increment: 1 } },
-      });
-      if (count === 0) {
-        return false;
-      }
-      if (changes.checklist !== undefined) {
-        await tx.jobChecklistItem.deleteMany({ where: { jobId: id } });
-        await tx.jobChecklistItem.createMany({
-          data: changes.checklist.map((label, position) => ({
-            jobId: id,
-            label,
-            position,
-          })),
+    try {
+      await this.prisma.$transaction(async tx => {
+        if (changes.mutation !== undefined) {
+          await insertMutation(tx, changes.mutation);
+        }
+        const { count } = await tx.job.updateMany({
+          where: { id, version: expectedVersion },
+          data: { ...changes.fields, version: { increment: 1 } },
         });
+        if (count === 0) {
+          // Throwing rolls back the idempotency record too.
+          throw new StaleVersion();
+        }
+        if (changes.checklist !== undefined) {
+          await tx.jobChecklistItem.deleteMany({ where: { jobId: id } });
+          await tx.jobChecklistItem.createMany({
+            data: changes.checklist.map((label, position) => ({
+              jobId: id,
+              label,
+              position,
+            })),
+          });
+        }
+        if (changes.event !== undefined) {
+          await tx.jobEvent.create({ data: { ...changes.event, jobId: id } });
+        }
+      });
+    } catch (error) {
+      if (error instanceof StaleVersion) {
+        return null;
       }
-      if (changes.event !== undefined) {
-        await tx.jobEvent.create({ data: { ...changes.event, jobId: id } });
-      }
-      return true;
-    });
+      throw error;
+    }
     // Read back after the commit: the multi-relation read runs its queries concurrently,
     // which a single transaction connection must not do (node-postgres deprecates it).
     // (null if a concurrent delete won the race: reported as a conflict too).
-    return applied ? this.findDetail(id) : null;
+    return this.findDetail(id);
+  }
+
+  /**
+   * Appends a field note (and the command's idempotency record) in one transaction. Notes are
+   * a child collection: they do not change the job's `version`, so a note never conflicts
+   * with a manager's edit.
+   *
+   * @throws DuplicateMutationError when a concurrent request recorded the same key first.
+   * @throws NoteIdTakenError when a note with this ID already exists.
+   */
+  async addNote(
+    jobId: string,
+    note: NoteInput,
+    mutation?: MutationRecord,
+  ): Promise<JobDetailRecord> {
+    await this.prisma.$transaction(async tx => {
+      if (mutation !== undefined) {
+        await insertMutation(tx, mutation);
+      }
+      try {
+        await tx.jobNote.create({ data: { ...note, jobId } });
+      } catch (error) {
+        throw isUniqueViolation(error) ? new NoteIdTakenError() : error;
+      }
+    });
+    return this.findDetailOrThrow(jobId);
+  }
+
+  findNote(id: string): Promise<{ jobId: string; authorId: string } | null> {
+    return this.prisma.jobNote.findUnique({
+      where: { id },
+      select: { jobId: true, authorId: true },
+    });
+  }
+
+  findMutation(
+    userId: string,
+    idempotencyKey: string,
+  ): Promise<ProcessedMutation | null> {
+    return this.prisma.processedMutation.findUnique({
+      where: { userId_idempotencyKey: { userId, idempotencyKey } },
+    });
+  }
+
+  /**
+   * Records a command that succeeded without writing anything (it was already applied), so a
+   * retry of it is recognized later too.
+   *
+   * @throws DuplicateMutationError when the key is already recorded.
+   */
+  async recordMutation(mutation: MutationRecord): Promise<void> {
+    await this.prisma.$transaction(tx => insertMutation(tx, mutation));
   }
 
   /** Deletes the job if it is still PENDING at `expectedVersion`; false otherwise. */
@@ -174,6 +312,18 @@ export class JobsRepository {
       where: { id, version: expectedVersion, status: 'PENDING' },
     });
     return count === 1;
+  }
+}
+
+/**
+ * Inserted first in its transaction, so a unique violation here can only mean "this key was
+ * already processed", never a constraint of the domain change.
+ */
+async function insertMutation(tx: Tx, mutation: MutationRecord): Promise<void> {
+  try {
+    await tx.processedMutation.create({ data: mutation });
+  } catch (error) {
+    throw isUniqueViolation(error) ? new DuplicateMutationError() : error;
   }
 }
 
