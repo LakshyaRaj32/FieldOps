@@ -130,7 +130,7 @@ describe('Jobs (e2e)', () => {
 
       const myJobs = dataOf<JobPage>(await get(workerA, '/jobs'));
       expect(myJobs.items.map(job => job.id)).toEqual([created.id]);
-      expect(myJobs.items[0]?.allowedActions).toEqual(['start']);
+      expect(myJobs.items[0]?.allowedActions).toEqual(['start', 'note']);
 
       const details = dataOf<JobDetail>(
         await get(workerA, `/jobs/${created.id}`),
@@ -140,14 +140,14 @@ describe('Jobs (e2e)', () => {
       const started = await post(workerA, `/jobs/${created.id}/start`);
       expect(dataOf<JobDetail>(started)).toMatchObject({
         status: 'IN_PROGRESS',
-        allowedActions: ['complete'],
+        allowedActions: ['complete', 'note'],
         startedAt: expect.any(String),
       });
 
       const completed = await post(workerA, `/jobs/${created.id}/complete`);
       expect(dataOf<JobDetail>(completed)).toMatchObject({
         status: 'COMPLETED',
-        allowedActions: [],
+        allowedActions: ['note'],
         completedAt: expect.any(String),
       });
 
@@ -405,7 +405,7 @@ describe('Jobs (e2e)', () => {
       expect(response.status).toBe(200);
       expect(dataOf<JobDetail>(response)).toMatchObject({
         id: job.id,
-        allowedActions: ['start'],
+        allowedActions: ['start', 'note'],
       });
     });
 
@@ -687,11 +687,11 @@ describe('Jobs (e2e)', () => {
         cancelledAt: expect.any(String),
         allowedActions: [],
       });
-      // The worker still sees the job, now closed.
+      // The worker still sees the job, now closed: only field notes remain possible.
       const forWorker = dataOf<JobDetail>(
         await get(workerA, `/jobs/${job.id}`),
       );
-      expect(forWorker.allowedActions).toEqual([]);
+      expect(forWorker.allowedActions).toEqual(['note']);
     });
 
     it('forbids workers from cancelling (403)', async () => {
