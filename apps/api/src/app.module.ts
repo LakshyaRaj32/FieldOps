@@ -7,6 +7,7 @@ import { RolesGuard } from './common/guards/roles.guard.js';
 import { ConfigModule } from './config/config.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { HealthModule } from './health/health.module.js';
+import { JobsModule } from './jobs/jobs.module.js';
 import { UsersModule } from './users/users.module.js';
 
 @Module({
@@ -16,6 +17,7 @@ import { UsersModule } from './users/users.module.js';
     HealthModule,
     UsersModule,
     AuthModule,
+    JobsModule,
   ],
   providers: [
     // Global guards run in this order: authenticate first, then check roles.

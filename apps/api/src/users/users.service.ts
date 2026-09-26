@@ -61,6 +61,18 @@ export class UsersService {
     await this.prisma.user.update({ where: { id }, data: { passwordHash } });
   }
 
+  /**
+   * Active users with the WORKER role, by name: the people a manager can assign jobs to.
+   * Tenancy scoping and search arrive with organizations.
+   */
+  listActiveWorkers(limit: number): Promise<User[]> {
+    return this.prisma.user.findMany({
+      where: { role: 'WORKER', isActive: true },
+      orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }, { id: 'asc' }],
+      take: limit,
+    });
+  }
+
   /** Newest first. Tenancy scoping and cursor pagination arrive with organizations. */
   list(limit: number): Promise<User[]> {
     return this.prisma.user.findMany({

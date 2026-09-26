@@ -21,7 +21,8 @@ export function setupSwagger(app: INestApplication, config: AppConfig): void {
       )
       .setVersion('v1')
       .addTag('auth', 'Registration, sign-in, token refresh, sign-out')
-      .addTag('users', 'User administration')
+      .addTag('users', 'User administration and assignable workers')
+      .addTag('jobs', 'Jobs: creation, assignment, status actions and history')
       .addTag('health', 'Liveness and readiness probes')
       .addBearerAuth({
         type: 'http',

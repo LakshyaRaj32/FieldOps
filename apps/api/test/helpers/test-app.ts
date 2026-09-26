@@ -37,5 +37,7 @@ export async function createTestApp(): Promise<TestApp> {
 
 /** Empties every table between tests. */
 export async function resetDatabase(prisma: PrismaService): Promise<void> {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE sessions, users CASCADE');
+  await prisma.$executeRawUnsafe(
+    'TRUNCATE TABLE job_events, job_checklist_items, jobs, sessions, users CASCADE',
+  );
 }
