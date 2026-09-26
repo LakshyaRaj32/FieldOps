@@ -1,0 +1,147 @@
+import {
+  JobAction,
+  JobEventType,
+  JobStatus,
+  type JobHistoryEntry,
+} from '@fieldops/types';
+
+import {
+  describeHistoryEntry,
+  formatSchedule,
+  formatTime,
+  jobCommands,
+  LIST_VIEWS,
+  priorityBadge,
+} from './presentation';
+
+const asha = { id: 'w1', firstName: 'Asha', lastName: 'Verma' };
+const ravi = { id: 'm1', firstName: 'Ravi', lastName: 'Kumar' };
+
+describe('jobCommands', () => {
+  it('offers Start job for an ASSIGNED job the worker may start', () => {
+    const commands = jobCommands({
+      allowedActions: [JobAction.START],
+      assignedWorker: asha,
+    });
+    expect(commands.map(c => [c.label, c.variant])).toEqual([
+      ['Start job', 'primary'],
+    ]);
+  });
+
+  it('offers Complete job, with a confirmation, for an IN_PROGRESS job', () => {
+    const [complete] = jobCommands({
+      allowedActions: [JobAction.COMPLETE],
+      assignedWorker: asha,
+    });
+    expect(complete?.label).toBe('Complete job');
+    expect(complete?.confirm?.confirmLabel).toBe('Complete');
+  });
+
+  it('offers nothing when the server allows nothing (another role, or a closed job)', () => {
+    expect(jobCommands({ allowedActions: [], assignedWorker: asha })).toEqual(
+      [],
+    );
+  });
+
+  it('shows exactly the allowed actions, in order, never extra ones', () => {
+    const commands = jobCommands({
+      allowedActions: [
+        JobAction.ASSIGN,
+        JobAction.EDIT,
+        JobAction.CANCEL,
+        JobAction.DELETE,
+      ],
+      assignedWorker: null,
+    });
+    expect(commands.map(c => c.action)).toEqual([
+      'assign',
+      'edit',
+      'cancel',
+      'delete',
+    ]);
+    expect(commands.map(c => c.label)).not.toContain('Start job');
+    // Destructive commands always ask first.
+    expect(
+      commands.filter(c => c.variant === 'danger').every(c => c.confirm),
+    ).toBe(true);
+  });
+
+  it('says Reassign when a worker is already assigned', () => {
+    const [assign] = jobCommands({
+      allowedActions: [JobAction.ASSIGN],
+      assignedWorker: asha,
+    });
+    expect(assign?.label).toBe('Reassign worker');
+  });
+});
+
+describe('formatSchedule', () => {
+  const now = new Date(2026, 8, 26, 14, 0);
+
+  it.each([
+    [new Date(2026, 8, 26, 10, 30), 'Today, 10:30 AM'],
+    [new Date(2026, 8, 27, 9, 0), 'Tomorrow, 9:00 AM'],
+    [new Date(2026, 8, 25, 16, 15), 'Yesterday, 4:15 PM'],
+    [new Date(2026, 8, 28, 12, 5), 'Mon 28 Sep, 12:05 PM'],
+    [new Date(2027, 0, 4, 0, 0), 'Mon 4 Jan 2027, 12:00 AM'],
+  ])('formats %s as %s', (date, expected) => {
+    expect(formatSchedule(date.toISOString(), now)).toBe(expected);
+  });
+
+  it('survives an unreadable timestamp', () => {
+    expect(formatSchedule('not a date', now)).toBe('Unknown time');
+  });
+
+  it('formats times on a 12-hour clock', () => {
+    expect(formatTime(new Date(2026, 0, 1, 0, 7))).toBe('12:07 AM');
+    expect(formatTime(new Date(2026, 0, 1, 12, 0))).toBe('12:00 PM');
+    expect(formatTime(new Date(2026, 0, 1, 23, 59))).toBe('11:59 PM');
+  });
+});
+
+describe('list views', () => {
+  it('splits work to do from closed jobs, with no status in both', () => {
+    const active = LIST_VIEWS.active.statuses;
+    const closed = LIST_VIEWS.closed.statuses;
+    expect([...active, ...closed].sort()).toEqual(
+      Object.values(JobStatus).sort(),
+    );
+    expect(active.filter(status => closed.includes(status))).toEqual([]);
+  });
+});
+
+describe('priorityBadge', () => {
+  it('highlights only high and urgent jobs', () => {
+    expect(priorityBadge('URGENT')?.tone).toBe('danger');
+    expect(priorityBadge('HIGH')?.tone).toBe('warning');
+    expect(priorityBadge('NORMAL')).toBeNull();
+    expect(priorityBadge('LOW')).toBeNull();
+  });
+});
+
+describe('describeHistoryEntry', () => {
+  const entry = (overrides: Partial<JobHistoryEntry>): JobHistoryEntry => ({
+    id: 'e1',
+    type: JobEventType.CREATED,
+    fromStatus: null,
+    toStatus: JobStatus.PENDING,
+    actor: ravi,
+    assignee: null,
+    createdAt: '2026-09-26T10:00:00.000Z',
+    ...overrides,
+  });
+
+  it('names who did what', () => {
+    expect(describeHistoryEntry(entry({}))).toBe('Created by Ravi Kumar');
+    expect(
+      describeHistoryEntry(
+        entry({ type: JobEventType.ASSIGNED, assignee: asha }),
+      ),
+    ).toBe('Assigned to Asha Verma by Ravi Kumar');
+    expect(
+      describeHistoryEntry(
+        entry({ type: JobEventType.COMPLETED, actor: asha }),
+      ),
+    ).toBe('Completed by Asha Verma');
+  });
+});
