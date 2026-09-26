@@ -1,7 +1,7 @@
 import type { AuthenticatedUser } from '../../common/types/authenticated-user.js';
 import { Role } from '../../users/role.js';
 import { JobAction, type JobStatus } from '../job-enums.js';
-import { isDeletable, isEditable, nextStatus } from './job-state-machine.js';
+import { isDeletable, isEditable, nextStatus } from '@fieldops/shared';
 
 /**
  * Job authorization. Pure functions, used for every job operation: the controller's route

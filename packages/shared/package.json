@@ -1,0 +1,27 @@
+{
+  "name": "@fieldops/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Framework-free runtime code shared by the FieldOps API and mobile app.",
+  "type": "module",
+  "main": "./dist/job-state-machine.js",
+  "types": "./src/job-state-machine.ts",
+  "react-native": "./src/job-state-machine.ts",
+  "exports": {
+    ".": {
+      "types": "./src/job-state-machine.ts",
+      "react-native": "./src/job-state-machine.ts",
+      "default": "./dist/job-state-machine.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@fieldops/config": "*",
+    "@fieldops/types": "*",
+    "vitest": "^4.1.2"
+  }
+}

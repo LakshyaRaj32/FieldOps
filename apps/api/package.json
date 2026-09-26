@@ -6,9 +6,13 @@
   "type": "module",
   "scripts": {
     "postinstall": "prisma generate",
+    "prebuild": "npm run build -w @fieldops/shared",
     "build": "prisma generate && nest build",
+    "prestart": "npm run build -w @fieldops/shared",
     "start": "nest start",
+    "prestart:dev": "npm run build -w @fieldops/shared",
     "start:dev": "nest start --watch",
+    "prestart:debug": "npm run build -w @fieldops/shared",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -25,6 +29,7 @@
     "user:set-role": "node --env-file-if-exists=.env scripts/set-role.mjs"
   },
   "dependencies": {
+    "@fieldops/shared": "*",
     "@nestjs/common": "^12.1.0",
     "@nestjs/core": "^12.1.0",
     "@nestjs/jwt": "^12.0.2",

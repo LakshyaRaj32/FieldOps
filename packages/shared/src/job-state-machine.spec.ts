@@ -1,4 +1,4 @@
-import { JobStatus } from '../job-enums.js';
+import { JobStatus } from '@fieldops/types';
 import {
   decideTransition,
   isChecklistEditable,
@@ -7,7 +7,7 @@ import {
   isTerminal,
   nextStatus,
   type JobTransition,
-} from './job-state-machine.js';
+} from './job-state-machine';
 
 const { PENDING, ASSIGNED, IN_PROGRESS, COMPLETED, CANCELLED } = JobStatus;
 const ALL_STATUSES = [PENDING, ASSIGNED, IN_PROGRESS, COMPLETED, CANCELLED];

@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+
 import { defineConfig } from 'vitest/config';
 
 import { TEST_ENV } from './test/test-env.js';
@@ -7,6 +9,17 @@ import { TEST_ENV } from './test/test-env.js';
  * PostgreSQL test database. The database is never mocked (docs/backend-architecture.md).
  */
 export default defineConfig({
+  // Tests run the shared package's TypeScript source; only the built API loads its dist/.
+  resolve: {
+    alias: {
+      '@fieldops/shared': fileURLToPath(
+        new URL(
+          '../../packages/shared/src/job-state-machine.ts',
+          import.meta.url,
+        ),
+      ),
+    },
+  },
   test: {
     globals: true,
     root: './',

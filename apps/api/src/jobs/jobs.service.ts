@@ -18,7 +18,7 @@ import {
   isDeletable,
   isEditable,
   type JobTransition,
-} from './domain/job-state-machine.js';
+} from '@fieldops/shared';
 import {
   canView,
   hasPermission,
@@ -67,7 +67,7 @@ interface TransitionPlan {
  * 4. write with a compare-and-set on `version` (plus a history event) → 409 on a race
  *
  * Authorization decisions come from domain/job.policy.ts and status rules from
- * domain/job-state-machine.ts; this class only orchestrates.
+ * @fieldops/shared (the job state machine); this class only orchestrates.
  */
 @Injectable()
 export class JobsService {

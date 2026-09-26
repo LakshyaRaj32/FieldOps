@@ -83,7 +83,7 @@ model Session {
 }
 
 /// Must stay identical to JobStatus in @fieldops/types (checked in src/jobs/job-enums.ts).
-/// Allowed transitions live in src/jobs/domain/job-state-machine.ts.
+/// Allowed transitions live in @fieldops/shared (packages/shared/src/job-state-machine.ts).
 enum JobStatus {
   PENDING
   ASSIGNED

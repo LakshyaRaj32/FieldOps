@@ -1,0 +1,15 @@
+{
+  // Emits the JavaScript the API loads at runtime (dist/). Type information is not emitted:
+  // every TypeScript consumer reads the source through the "types" export condition.
+  "extends": "@fieldops/config/tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.spec.ts"]
+}

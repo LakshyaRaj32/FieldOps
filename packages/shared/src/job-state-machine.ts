@@ -1,9 +1,9 @@
-import { JobStatus } from '../job-enums.js';
+import type { JobStatus } from '@fieldops/types';
 
 /**
  * The job lifecycle: the single place that decides which status changes exist. Pure
- * TypeScript (no Nest, no Prisma, no I/O) so it is unit-tested in isolation and can move to
- * @fieldops/shared when the mobile app needs it offline (Phase 3).
+ * TypeScript with no runtime dependencies, used by the API (to enforce transitions) and by the
+ * mobile app (to validate worker commands offline, Phase 3).
  *
  *   PENDING ──assign──▶ ASSIGNED ──start──▶ IN_PROGRESS ──complete──▶ COMPLETED
  *      │                  │  ▲                  │
@@ -24,21 +24,21 @@ export type JobTransition = 'assign' | 'start' | 'complete' | 'cancel';
 const TRANSITIONS: Readonly<
   Record<JobStatus, Readonly<Partial<Record<JobTransition, JobStatus>>>>
 > = {
-  [JobStatus.PENDING]: {
-    assign: JobStatus.ASSIGNED,
-    cancel: JobStatus.CANCELLED,
+  PENDING: {
+    assign: 'ASSIGNED',
+    cancel: 'CANCELLED',
   },
-  [JobStatus.ASSIGNED]: {
-    assign: JobStatus.ASSIGNED,
-    start: JobStatus.IN_PROGRESS,
-    cancel: JobStatus.CANCELLED,
+  ASSIGNED: {
+    assign: 'ASSIGNED',
+    start: 'IN_PROGRESS',
+    cancel: 'CANCELLED',
   },
-  [JobStatus.IN_PROGRESS]: {
-    complete: JobStatus.COMPLETED,
-    cancel: JobStatus.CANCELLED,
+  IN_PROGRESS: {
+    complete: 'COMPLETED',
+    cancel: 'CANCELLED',
   },
-  [JobStatus.COMPLETED]: {},
-  [JobStatus.CANCELLED]: {},
+  COMPLETED: {},
+  CANCELLED: {},
 };
 
 /** The status a transition leads to from `from`, or undefined when it is not allowed. */
@@ -50,7 +50,7 @@ export function nextStatus(
 }
 
 export function isTerminal(status: JobStatus): boolean {
-  return status === JobStatus.COMPLETED || status === JobStatus.CANCELLED;
+  return status === 'COMPLETED' || status === 'CANCELLED';
 }
 
 /** Manager-owned fields (title, schedule, notes...) can change until the job is closed. */
@@ -60,7 +60,7 @@ export function isEditable(status: JobStatus): boolean {
 
 /** The checklist is fixed once the worker starts working through it. */
 export function isChecklistEditable(status: JobStatus): boolean {
-  return status === JobStatus.PENDING || status === JobStatus.ASSIGNED;
+  return status === 'PENDING' || status === 'ASSIGNED';
 }
 
 /**
@@ -68,15 +68,15 @@ export function isChecklistEditable(status: JobStatus): boolean {
  * it). Anything else is cancelled instead, so its history is kept.
  */
 export function isDeletable(status: JobStatus): boolean {
-  return status === JobStatus.PENDING;
+  return status === 'PENDING';
 }
 
 /** The status each transition aims for (used to recognize repeated commands). */
 const TARGET: Readonly<Record<JobTransition, JobStatus>> = {
-  assign: JobStatus.ASSIGNED,
-  start: JobStatus.IN_PROGRESS,
-  complete: JobStatus.COMPLETED,
-  cancel: JobStatus.CANCELLED,
+  assign: 'ASSIGNED',
+  start: 'IN_PROGRESS',
+  complete: 'COMPLETED',
+  cancel: 'CANCELLED',
 };
 
 export type TransitionDecision =
