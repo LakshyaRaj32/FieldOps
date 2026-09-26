@@ -65,6 +65,13 @@ const CODE_MESSAGES: Partial<Record<ApiErrorCode, string>> = {
   SESSION_EXPIRED: SESSION_ENDED,
   FORBIDDEN: "You don't have permission to do that.",
   NOT_FOUND: 'The requested item could not be found.',
+  INVALID_STATUS_TRANSITION:
+    "That action isn't possible for this job anymore. The job has been refreshed.",
+  JOB_NOT_EDITABLE: 'This job can no longer be changed that way.',
+  INVALID_ASSIGNEE:
+    "That worker can't be assigned jobs. Choose another worker.",
+  VERSION_CONFLICT:
+    'Someone else changed this job. The latest version has been loaded; please try again.',
 };
 
 function messageForStatus(status: number): string {
