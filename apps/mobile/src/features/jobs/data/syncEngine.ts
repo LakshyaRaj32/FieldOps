@@ -169,6 +169,11 @@ export class JobSyncEngine {
     return this.running;
   }
 
+  /** Resolves when no cycle is running (for example before the database is closed). */
+  async whenIdle(): Promise<void> {
+    await this.running;
+  }
+
   /** Stops timers and listeners (sign-out). A running cycle finishes on its own. */
   dispose(): void {
     this.disposed = true;

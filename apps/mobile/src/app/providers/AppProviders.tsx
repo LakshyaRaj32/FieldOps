@@ -4,6 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Provider as ReduxProvider } from 'react-redux';
 
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
+import { OfflineJobsProvider } from '../../features/jobs/data/OfflineJobsProvider';
 import { store } from '../../store';
 import { ThemeProvider, useTheme } from '../../theme';
 import { AppServices } from './AppServices';
@@ -31,7 +32,7 @@ export function AppProviders({
           <ThemedStatusBar />
           <ErrorBoundary>
             <AppServices />
-            {children}
+            <OfflineJobsProvider>{children}</OfflineJobsProvider>
           </ErrorBoundary>
         </ThemeProvider>
       </ReduxProvider>

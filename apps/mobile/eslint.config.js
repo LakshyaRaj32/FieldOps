@@ -42,6 +42,7 @@ module.exports = [
             boundary('@react-native-community/netinfo', 'src/services/network'),
             boundary('react-native-mmkv', 'src/services/storage'),
             boundary('react-native-keychain', 'src/services/storage'),
+            boundary('react-native-nitro-sqlite', 'src/services/db'),
           ],
         },
       ],
@@ -53,7 +54,11 @@ module.exports = [
     rules: { 'no-restricted-imports': 'off' },
   },
   {
-    files: ['src/services/network/**', 'src/services/storage/**'],
+    files: [
+      'src/services/network/**',
+      'src/services/storage/**',
+      'src/services/db/**',
+    ],
     rules: { 'no-restricted-imports': 'off' },
   },
   {

@@ -1,10 +1,12 @@
 import type {
+  AddJobNoteRequest,
   AssignJobRequest,
   CancelJobRequest,
   CreateJobRequest,
   JobDetail,
   JobPage,
   JobStatus,
+  JobWorkingSet,
   UpdateJobRequest,
   WorkerSummary,
 } from '@fieldops/types';
@@ -13,7 +15,12 @@ import type { FetchArgs } from '@reduxjs/toolkit/query/react';
 
 import { API_V1, baseApi } from '../../../services/api/baseApi';
 import { parseError, type AppError } from '../../../utils/errors';
-import { isJobDetail, isJobPage, isWorkerList } from './contracts';
+import {
+  isJobDetail,
+  isJobPage,
+  isJobWorkingSet,
+  isWorkerList,
+} from './contracts';
 
 /** Filters for a job list. Workers always get their own jobs (enforced by the server). */
 export interface JobListArgs {
@@ -55,10 +62,19 @@ async function fetchChecked<T>(
     : { error: parseError(`Unexpected ${what} response`) };
 }
 
+/** A worker command as the sync engine sends it: the same key on every attempt. */
+export interface WorkerCommandArgs {
+  readonly id: string;
+  readonly idempotencyKey: string;
+}
+
+const IDEMPOTENCY_KEY = 'Idempotency-Key';
+
 /**
- * Job endpoints (online, Phase 2). Screens use only the hooks exported here, so the offline
- * phase can move the worker's jobs to SQLite behind the same feature API without touching
- * the screens.
+ * Job endpoints. Managers use them directly (online screens). Workers never call the command
+ * or read endpoints from screens: their jobs live in SQLite and reach the server through the
+ * sync engine (data/apiTransport.ts), which uses `startJob`, `completeJob`, `addJobNote` and
+ * `getWorkingSet` here, so authentication, token refresh and error mapping stay in one place.
  *
  * Every command invalidates the job and the lists, also when it fails: a VERSION_CONFLICT or
  * INVALID_STATUS_TRANSITION means the screen is showing a stale job, and the refetch brings
@@ -69,15 +85,19 @@ export const jobsApi = baseApi
   .injectEndpoints({
     endpoints: build => {
       const command = (path: 'start' | 'complete') =>
-        build.mutation<JobDetail, string>({
-          queryFn: (id, _api, _extra, send) =>
+        build.mutation<JobDetail, WorkerCommandArgs>({
+          queryFn: ({ id, idempotencyKey }, _api, _extra, send) =>
             fetchChecked(
               send,
-              { url: `${API_V1}/jobs/${id}/${path}`, method: 'POST' },
+              {
+                url: `${API_V1}/jobs/${id}/${path}`,
+                method: 'POST',
+                headers: { [IDEMPOTENCY_KEY]: idempotencyKey },
+              },
               isJobDetail,
               `job ${path}`,
             ),
-          invalidatesTags: (_result, _error, id) => [jobTag(id), LIST],
+          invalidatesTags: (_result, _error, { id }) => [jobTag(id), LIST],
         });
 
       return {
@@ -161,6 +181,37 @@ export const jobsApi = baseApi
         startJob: command('start'),
         completeJob: command('complete'),
 
+        addJobNote: build.mutation<
+          JobDetail,
+          WorkerCommandArgs & { readonly note: AddJobNoteRequest }
+        >({
+          queryFn: ({ id, idempotencyKey, note }, _api, _extra, send) =>
+            fetchChecked(
+              send,
+              {
+                url: `${API_V1}/jobs/${id}/notes`,
+                method: 'POST',
+                headers: { [IDEMPOTENCY_KEY]: idempotencyKey },
+                body: note,
+              },
+              isJobDetail,
+              'job note',
+            ),
+          invalidatesTags: (_result, _error, { id }) => [jobTag(id), LIST],
+        }),
+
+        getWorkingSet: build.query<JobWorkingSet, void>({
+          queryFn: (_arg, _api, _extra, send) =>
+            fetchChecked(
+              send,
+              `${API_V1}/jobs/working-set`,
+              isJobWorkingSet,
+              'working set',
+            ),
+          // The sync engine stores the result in SQLite; nothing reads it from the cache.
+          keepUnusedDataFor: 0,
+        }),
+
         cancelJob: build.mutation<
           JobDetail,
           { readonly id: string } & CancelJobRequest
@@ -196,8 +247,6 @@ export const {
   useUpdateJobMutation,
   useDeleteJobMutation,
   useAssignJobMutation,
-  useStartJobMutation,
-  useCompleteJobMutation,
   useCancelJobMutation,
   useListWorkersQuery,
 } = jobsApi;

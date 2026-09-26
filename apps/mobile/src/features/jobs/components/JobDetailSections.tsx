@@ -1,0 +1,212 @@
+import React from 'react';
+import { Alert, StyleSheet, View } from 'react-native';
+import type { JobDetail } from '@fieldops/types';
+
+import { InfoRow } from '../../../components/common/InfoRow';
+import {
+  AppText,
+  Badge,
+  Button,
+  Card,
+  type BadgeTone,
+} from '../../../components/ui';
+import { useTheme } from '../../../theme';
+import {
+  describeHistoryEntry,
+  formatSchedule,
+  fullName,
+  PRIORITY_LABELS,
+  type JobCommand,
+} from '../presentation';
+import { JobPriorityBadge, JobStatusBadge } from './JobBadges';
+
+/** Runs a command, asking first when it is irreversible or destructive. */
+export function confirmThen(command: JobCommand, run: () => void): void {
+  const { confirm } = command;
+  if (confirm === undefined) {
+    run();
+    return;
+  }
+  Alert.alert(confirm.title, confirm.message, [
+    { text: 'Back', style: 'cancel' },
+    {
+      text: confirm.confirmLabel,
+      style: command.variant === 'danger' ? 'destructive' : 'default',
+      onPress: run,
+    },
+  ]);
+}
+
+export function JobHeader({
+  job,
+  syncBadge = null,
+}: {
+  readonly job: JobDetail;
+  readonly syncBadge?: { label: string; tone: BadgeTone } | null;
+}): React.JSX.Element {
+  const theme = useTheme();
+  return (
+    <View style={{ gap: theme.spacing.sm }}>
+      <AppText variant="title">{job.title}</AppText>
+      <View style={[styles.row, { gap: theme.spacing.sm }]}>
+        <JobStatusBadge status={job.status} />
+        <JobPriorityBadge priority={job.priority} />
+        {syncBadge !== null ? (
+          <Badge label={syncBadge.label} tone={syncBadge.tone} />
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+export function JobCommandButtons({
+  commands,
+  onRun,
+  busy = false,
+}: {
+  readonly commands: readonly JobCommand[];
+  readonly onRun: (command: JobCommand) => void;
+  readonly busy?: boolean;
+}): React.JSX.Element | null {
+  const theme = useTheme();
+  if (commands.length === 0) {
+    return null;
+  }
+  return (
+    <View style={{ gap: theme.spacing.sm }}>
+      {commands.map(command => (
+        <Button
+          key={command.action}
+          label={command.label}
+          variant={command.variant}
+          onPress={() => onRun(command)}
+          disabled={busy}
+        />
+      ))}
+    </View>
+  );
+}
+
+export function JobInformation({
+  job,
+  showAssignee,
+}: {
+  readonly job: JobDetail;
+  readonly showAssignee: boolean;
+}): React.JSX.Element {
+  return (
+    <Card>
+      <AppText variant="label" tone="muted">
+        Details
+      </AppText>
+      <InfoRow label="Scheduled" value={formatSchedule(job.scheduledAt)} />
+      <InfoRow label="Customer" value={job.customerName} />
+      <InfoRow label="Address" value={job.address} />
+      {job.location !== null ? (
+        <InfoRow
+          label="Coordinates"
+          value={`${job.location.latitude.toFixed(
+            5,
+          )}, ${job.location.longitude.toFixed(5)}`}
+        />
+      ) : null}
+      <InfoRow label="Priority" value={PRIORITY_LABELS[job.priority]} />
+      {showAssignee ? (
+        <InfoRow
+          label="Assigned to"
+          value={
+            job.assignedWorker === null
+              ? 'Nobody yet'
+              : fullName(job.assignedWorker)
+          }
+        />
+      ) : null}
+      {job.description !== null ? (
+        <InfoRow label="Description" value={job.description} />
+      ) : null}
+      {job.notes !== null ? (
+        <InfoRow label="Instructions" value={job.notes} />
+      ) : null}
+      {job.cancellationReason !== null ? (
+        <InfoRow label="Cancellation reason" value={job.cancellationReason} />
+      ) : null}
+    </Card>
+  );
+}
+
+export function JobChecklist({
+  job,
+}: {
+  readonly job: JobDetail;
+}): React.JSX.Element | null {
+  if (job.checklist.length === 0) {
+    return null;
+  }
+  return (
+    <Card>
+      <AppText variant="label" tone="muted">
+        Checklist
+      </AppText>
+      {job.checklist.map(item => (
+        <AppText key={item.id}>
+          {item.position + 1}. {item.label}
+        </AppText>
+      ))}
+    </Card>
+  );
+}
+
+/** Field notes, with a composer on top when the viewer may add notes. */
+export function JobFieldNotes({
+  job,
+  composer,
+}: {
+  readonly job: JobDetail;
+  readonly composer?: React.ReactNode;
+}): React.JSX.Element | null {
+  if (job.fieldNotes.length === 0 && composer === undefined) {
+    return null;
+  }
+  return (
+    <Card>
+      <AppText variant="label" tone="muted">
+        Field notes
+      </AppText>
+      {composer}
+      {job.fieldNotes.map(note => (
+        <InfoRow
+          key={note.id}
+          label={`${fullName(note.author)} · ${formatSchedule(
+            note.occurredAt,
+          )}`}
+          value={note.body}
+        />
+      ))}
+    </Card>
+  );
+}
+
+export function JobHistory({
+  job,
+}: {
+  readonly job: JobDetail;
+}): React.JSX.Element {
+  return (
+    <Card>
+      <AppText variant="label" tone="muted">
+        History
+      </AppText>
+      {job.history.map(entry => (
+        <InfoRow
+          key={entry.id}
+          label={formatSchedule(entry.createdAt)}
+          value={describeHistoryEntry(entry)}
+        />
+      ))}
+    </Card>
+  );
+}
+
+const styles = StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
+});

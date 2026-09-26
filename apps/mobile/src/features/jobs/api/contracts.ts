@@ -6,6 +6,7 @@ import {
   type JobDetail,
   type JobPage,
   type JobSummary,
+  type JobWorkingSet,
   type UserSummary,
   type WorkerSummary,
 } from '@fieldops/types';
@@ -48,6 +49,16 @@ function isUserSummary(value: unknown): value is UserSummary {
 
 const isNullableUser = (value: unknown): boolean =>
   value === null || isUserSummary(value);
+
+function isJobNote(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const { id, body, author, occurredAt, createdAt } = value;
+  return (
+    [id, body, occurredAt, createdAt].every(isString) && isUserSummary(author)
+  );
+}
 
 export function isJobSummary(value: unknown): value is JobSummary {
   if (!isRecord(value)) {
@@ -129,6 +140,7 @@ export function isJobDetail(value: unknown): value is JobDetail {
     createdBy,
     checklist,
     history,
+    fieldNotes,
   } = value as Record<string, unknown>;
   return (
     [
@@ -143,8 +155,17 @@ export function isJobDetail(value: unknown): value is JobDetail {
     isLocation(location) &&
     isUserSummary(createdBy) &&
     isArrayOf(checklist, isChecklistItem) &&
-    isArrayOf(history, isHistoryEntry)
+    isArrayOf(history, isHistoryEntry) &&
+    isArrayOf(fieldNotes, isJobNote)
   );
+}
+
+export function isJobWorkingSet(value: unknown): value is JobWorkingSet {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const { jobs, generatedAt } = value;
+  return isArrayOf(jobs, isJobDetail) && isString(generatedAt);
 }
 
 export function isJobPage(value: unknown): value is JobPage {

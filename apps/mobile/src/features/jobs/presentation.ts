@@ -9,6 +9,9 @@ import {
 } from '@fieldops/types';
 
 import type { BadgeTone, ButtonVariant } from '../../components/ui';
+import { RETRY_POLICY } from './data/retryPolicy';
+import type { SyncStatus } from './data/syncEngine';
+import type { OutboxEntry, OutboxType } from './data/types';
 
 /**
  * How jobs are shown: labels, badge tones, schedule formatting and the command buttons for
@@ -171,7 +174,8 @@ function commandFor(action: JobAction, assigned: boolean): JobCommand | null {
         variant: 'primary',
         confirm: {
           title: 'Complete this job?',
-          message: 'The job will be marked as completed. This cannot be undone.',
+          message:
+            'The job will be marked as completed. This cannot be undone.',
           confirmLabel: 'Complete',
         },
       };
@@ -228,4 +232,86 @@ export function describeHistoryEntry(entry: JobHistoryEntry): string {
     case JobEventType.CANCELLED:
       return `Cancelled by ${actor}`;
   }
+}
+
+/** How the worker's offline commands are named in the UI. */
+export const OUTBOX_LABELS: Readonly<Record<OutboxType, string>> = {
+  'job.start': 'Start job',
+  'job.complete': 'Complete job',
+  'job.note.add': 'Note',
+};
+
+const plural = (count: number, one: string, many: string) =>
+  `${count} ${count === 1 ? one : many}`;
+
+/**
+ * Why a command did not reach the server, in words a worker can act on. Conflicts mean the
+ * server state won; failures mean the command was refused or could not be delivered.
+ */
+export function describeProblem(entry: OutboxEntry): string {
+  const what = `“${OUTBOX_LABELS[entry.type]}” on ${entry.jobTitle}`;
+  const code = entry.lastError?.code;
+  if (entry.status === 'conflict') {
+    if (code === 'NOT_FOUND' || code === 'FORBIDDEN') {
+      return `${what} was not applied: this job is no longer assigned to you.`;
+    }
+    return `${what} was not applied: the job changed while you were offline. The latest version is shown.`;
+  }
+  if (entry.attempts >= RETRY_POLICY.maxAttempts) {
+    return `${what} could not be delivered after ${entry.attempts} attempts. Try again when the server is reachable.`;
+  }
+  return `${what} was refused by the server${
+    code === undefined ? '' : ` (${code})`
+  }.`;
+}
+
+/** The badge on a worker's job: problems first, then unsynced changes. */
+export function jobSyncBadge(item: {
+  readonly pendingChanges: number;
+  readonly problems: number;
+}): { label: string; tone: BadgeTone } | null {
+  if (item.problems > 0) {
+    return { label: 'Needs attention', tone: 'danger' };
+  }
+  if (item.pendingChanges > 0) {
+    return { label: 'Waiting to sync', tone: 'neutral' };
+  }
+  return null;
+}
+
+export interface SyncBanner {
+  readonly message: string;
+  readonly tone: BadgeTone;
+}
+
+/** The global sync message, or null when everything is synced (nothing to say). */
+export function describeSync(status: SyncStatus | null): SyncBanner | null {
+  if (status === null) {
+    return null;
+  }
+  const problems = status.failed + status.conflicts;
+  if (problems > 0) {
+    return {
+      message: `${plural(
+        problems,
+        'change needs',
+        'changes need',
+      )} attention (Profile › Sync).`,
+      tone: 'danger',
+    };
+  }
+  if (status.pending === 0) {
+    return null;
+  }
+  const changes = plural(status.pending, 'change', 'changes');
+  if (status.phase === 'syncing') {
+    return { message: `Syncing ${changes}…`, tone: 'primary' };
+  }
+  if (status.phase === 'offline') {
+    return {
+      message: `${changes} saved on this phone. They will sync when you are back online.`,
+      tone: 'warning',
+    };
+  }
+  return { message: `${changes} waiting to sync.`, tone: 'neutral' };
 }

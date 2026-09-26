@@ -199,13 +199,20 @@ describe('job commands', () => {
     await details;
 
     const result = await store.dispatch(
-      jobsApi.endpoints.startJob.initiate('job-1'),
+      jobsApi.endpoints.startJob.initiate({
+        id: 'job-1',
+        idempotencyKey: '0190c3b1-7a2e-7cc1-9f00-3b1d2e4f5a60',
+      }),
     );
 
     expect(result.data?.status).toBe('IN_PROGRESS');
     expect(
       requests.map(r => `${r.method} ${new URL(r.url).pathname}`),
     ).toContain('POST /api/v1/jobs/job-1/start');
+    // Every attempt of a worker command carries its idempotency key.
+    expect(
+      requests.find(r => r.method === 'POST')?.headers.get('Idempotency-Key'),
+    ).toBe('0190c3b1-7a2e-7cc1-9f00-3b1d2e4f5a60');
     await jest.runOnlyPendingTimersAsync();
     expect(cachedJob(store)?.status).toBe('IN_PROGRESS');
     details.unsubscribe();
@@ -225,7 +232,10 @@ describe('job commands', () => {
     await details;
 
     const result = await store.dispatch(
-      jobsApi.endpoints.startJob.initiate('job-1'),
+      jobsApi.endpoints.startJob.initiate({
+        id: 'job-1',
+        idempotencyKey: '0190c3b1-7a2e-7cc1-9f00-3b1d2e4f5a60',
+      }),
     );
 
     expect(toAppError(result.error)).toMatchObject({

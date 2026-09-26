@@ -2,7 +2,7 @@ import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import type { JobSummary } from '@fieldops/types';
 
-import { AppText, Card } from '../../../components/ui';
+import { AppText, Badge, Card, type BadgeTone } from '../../../components/ui';
 import { useTheme } from '../../../theme';
 import { formatSchedule, fullName, STATUS_LABELS } from '../presentation';
 import { JobPriorityBadge, JobStatusBadge } from './JobBadges';
@@ -12,6 +12,11 @@ export interface JobCardProps {
   readonly onPress: (job: JobSummary) => void;
   /** Managers see who the job is assigned to; a worker knows it is theirs. */
   readonly showAssignee?: boolean;
+  /** The worker's unsynced state for this job, when there is one. */
+  readonly syncBadge?: {
+    readonly label: string;
+    readonly tone: BadgeTone;
+  } | null;
 }
 
 /** A job in a list: title, customer, status, schedule and (for managers) the assignee. */
@@ -19,6 +24,7 @@ export function JobCard({
   job,
   onPress,
   showAssignee = false,
+  syncBadge = null,
 }: JobCardProps): React.JSX.Element {
   const theme = useTheme();
   const schedule = formatSchedule(job.scheduledAt);
@@ -47,6 +53,9 @@ export function JobCard({
         <View style={[styles.row, { gap: theme.spacing.sm }]}>
           <AppText variant="bodyStrong">{schedule}</AppText>
           <JobPriorityBadge priority={job.priority} />
+          {syncBadge !== null ? (
+            <Badge label={syncBadge.label} tone={syncBadge.tone} />
+          ) : null}
         </View>
         {showAssignee ? (
           <AppText variant="caption" tone="muted">

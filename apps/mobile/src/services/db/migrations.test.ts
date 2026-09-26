@@ -10,7 +10,7 @@ const tables = async (db: ReturnType<typeof openNodeSqliteDatabase>) =>
     await db.all(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
     )
-  ).map(row => row['name']);
+  ).map(({ name }) => name);
 
 describe('local database migrations', () => {
   it('creates the schema on a new database and records the version', async () => {

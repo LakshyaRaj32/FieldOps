@@ -19,7 +19,7 @@ export interface Migration {
 
 export async function currentVersion(db: SqlDatabase): Promise<number> {
   const [row] = await db.all('PRAGMA user_version');
-  const version = row?.['user_version'];
+  const { user_version: version } = row ?? {};
   return typeof version === 'number' ? version : 0;
 }
 

@@ -24,9 +24,11 @@ import { selectSessionUser } from '../../../store/slices/sessionSlice';
 import { useTheme } from '../../../theme';
 import { useListJobsInfiniteQuery } from '../../jobs/api/jobsApi';
 import { JobCard } from '../../jobs/components/JobCard';
-import { LIST_VIEWS } from '../../jobs/presentation';
+import { useLocalJobs } from '../../jobs/data/OfflineJobsContext';
+import { jobSyncBadge, LIST_VIEWS } from '../../jobs/presentation';
 
 const UP_NEXT = { ...LIST_VIEWS.active, limit: 3 };
+const UP_NEXT_COUNT = 3;
 
 const STATUS_TONES: Readonly<Record<ConnectivityStatus, BadgeTone>> = {
   online: 'success',
@@ -52,8 +54,6 @@ export function DashboardScreen({
   const user = useAppSelector(selectSessionUser);
   const connectivity = useConnectivity();
   const isWorker = user?.role === Role.WORKER;
-  const upNext = useListJobsInfiniteQuery(UP_NEXT);
-  const jobs = upNext.data?.pages[0]?.items ?? [];
   const openJob = (jobId: string) =>
     navigation.navigate('Jobs', {
       screen: 'JobDetail',
@@ -87,34 +87,11 @@ export function DashboardScreen({
         <AppText variant="label" tone="muted">
           {isWorker ? 'Up next for you' : 'Up next'}
         </AppText>
-        {upNext.isLoading ? <LoadingState /> : null}
-        {upNext.isError && jobs.length === 0 ? (
-          <ErrorState
-            title="Couldn't load jobs"
-            error={upNext.error}
-            onRetry={() => {
-              upNext.refetch().catch(() => undefined);
-            }}
-          />
-        ) : null}
-        {!upNext.isLoading && !upNext.isError && jobs.length === 0 ? (
-          <EmptyState
-            title="No open jobs"
-            description={
-              isWorker
-                ? 'Jobs assigned to you will appear here.'
-                : 'Create a job in the Jobs tab and assign it to a worker.'
-            }
-          />
-        ) : null}
-        {jobs.map(job => (
-          <JobCard
-            key={job.id}
-            job={job}
-            onPress={() => openJob(job.id)}
-            showAssignee={!isWorker}
-          />
-        ))}
+        {isWorker ? (
+          <WorkerUpNext onOpen={openJob} />
+        ) : (
+          <ManagerUpNext onOpen={openJob} />
+        )}
         <Button
           label="Open Jobs"
           variant="secondary"
@@ -122,6 +99,85 @@ export function DashboardScreen({
         />
       </Card>
     </Screen>
+  );
+}
+
+/** The worker's next jobs, from the phone (works offline). */
+function WorkerUpNext({
+  onOpen,
+}: {
+  readonly onOpen: (jobId: string) => void;
+}): React.JSX.Element {
+  const { data: items, error } = useLocalJobs(UP_NEXT.statuses, UP_NEXT.order);
+  if (error !== undefined) {
+    return <ErrorState title="Couldn't read your jobs" error={error} />;
+  }
+  if (items === undefined) {
+    return <LoadingState />;
+  }
+  if (items.length === 0) {
+    return (
+      <EmptyState
+        title="No open jobs"
+        description="Jobs assigned to you will appear here, also when you are offline."
+      />
+    );
+  }
+  return (
+    <>
+      {items.slice(0, UP_NEXT_COUNT).map(item => (
+        <JobCard
+          key={item.job.id}
+          job={item.job}
+          onPress={() => onOpen(item.job.id)}
+          syncBadge={jobSyncBadge(item)}
+        />
+      ))}
+    </>
+  );
+}
+
+/** The next open jobs of the whole team (online). */
+function ManagerUpNext({
+  onOpen,
+}: {
+  readonly onOpen: (jobId: string) => void;
+}): React.JSX.Element {
+  const upNext = useListJobsInfiniteQuery(UP_NEXT);
+  const jobs = upNext.data?.pages[0]?.items ?? [];
+  if (upNext.isLoading) {
+    return <LoadingState />;
+  }
+  if (upNext.isError && jobs.length === 0) {
+    return (
+      <ErrorState
+        title="Couldn't load jobs"
+        error={upNext.error}
+        onRetry={() => {
+          upNext.refetch().catch(() => undefined);
+        }}
+      />
+    );
+  }
+  if (jobs.length === 0) {
+    return (
+      <EmptyState
+        title="No open jobs"
+        description="Create a job in the Jobs tab and assign it to a worker."
+      />
+    );
+  }
+  return (
+    <>
+      {jobs.map(job => (
+        <JobCard
+          key={job.id}
+          job={job}
+          onPress={() => onOpen(job.id)}
+          showAssignee
+        />
+      ))}
+    </>
   );
 }
 

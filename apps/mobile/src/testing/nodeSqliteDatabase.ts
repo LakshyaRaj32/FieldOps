@@ -21,7 +21,6 @@ interface DatabaseSync {
 type DatabaseSyncConstructor = new (path: string) => DatabaseSync;
 
 function loadDatabaseSync(): DatabaseSyncConstructor {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const sqlite = require('node:sqlite') as {
     DatabaseSync: DatabaseSyncConstructor;
   };

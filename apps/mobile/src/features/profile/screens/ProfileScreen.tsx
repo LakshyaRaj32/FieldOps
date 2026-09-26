@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Alert } from 'react-native';
 
 import type { AppTabScreenProps } from '../../../app/navigation/types';
 import {
@@ -14,6 +15,8 @@ import { useAppDispatch, useAppSelector } from '../../../store/hooks';
 import { selectSessionUser } from '../../../store/slices/sessionSlice';
 import { useThemePreference, type ThemePreference } from '../../../theme';
 import { signOut } from '../../auth/session';
+import { SyncCard } from '../../jobs/components/SyncCard';
+import { useOfflineJobs } from '../../jobs/data/OfflineJobsContext';
 import { DiagnosticsCard } from '../components/DiagnosticsCard';
 import { InfoRow } from '../../../components/common/InfoRow';
 
@@ -31,10 +34,37 @@ export function ProfileScreen(
   const { preference, setPreference } = useThemePreference();
   const [signingOut, setSigningOut] = useState(false);
 
-  const handleSignOut = () => {
+  const offline = useOfflineJobs();
+  const unsynced =
+    offline === null
+      ? 0
+      : offline.status.pending +
+        offline.status.failed +
+        offline.status.conflicts;
+
+  const doSignOut = () => {
     setSigningOut(true);
     // The session state change unmounts this screen; no need to reset the flag.
     dispatch(signOut()).catch(() => setSigningOut(false));
+  };
+
+  // Unsynced work is never discarded: it stays on the phone until this worker signs in again.
+  const handleSignOut = () => {
+    if (unsynced === 0) {
+      doSignOut();
+      return;
+    }
+    Alert.alert(
+      'Sign out with unsynced changes?',
+      `${unsynced} change${
+        unsynced === 1 ? ' has' : 's have'
+      } not reached the server yet. ` +
+        'They stay on this phone and sync after you sign in again.',
+      [
+        { text: 'Stay signed in', style: 'cancel' },
+        { text: 'Sign out', style: 'destructive', onPress: doSignOut },
+      ],
+    );
   };
 
   return (
@@ -67,6 +97,8 @@ export function ProfileScreen(
           onChange={setPreference}
         />
       </Card>
+
+      <SyncCard />
 
       <DiagnosticsCard />
 

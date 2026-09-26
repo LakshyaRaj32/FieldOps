@@ -2,6 +2,7 @@ import React, { type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { ConnectivityBanner } from '../../components/common/ConnectivityBanner';
+import { SyncStatusBanner } from '../../features/jobs/components/SyncStatusBanner';
 
 /**
  * Wraps every screen (via the navigators' `screenLayout`) so app-wide UI such as the
@@ -16,6 +17,7 @@ export function ScreenLayout({
   return (
     <View style={styles.fill}>
       <ConnectivityBanner />
+      <SyncStatusBanner />
       <View style={styles.fill}>{children}</View>
     </View>
   );

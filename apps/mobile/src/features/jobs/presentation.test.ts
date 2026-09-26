@@ -5,8 +5,11 @@ import {
   type JobHistoryEntry,
 } from '@fieldops/types';
 
+import type { OutboxEntry } from './data/types';
 import {
   describeHistoryEntry,
+  describeProblem,
+  describeSync,
   formatSchedule,
   formatTime,
   jobCommands,
@@ -143,5 +146,90 @@ describe('describeHistoryEntry', () => {
         entry({ type: JobEventType.COMPLETED, actor: asha }),
       ),
     ).toBe('Completed by Asha Verma');
+  });
+});
+
+describe('describeProblem', () => {
+  const problem = (overrides: Partial<OutboxEntry>): OutboxEntry => ({
+    seq: 1,
+    mutationId: 'm-1',
+    type: 'job.start',
+    jobId: 'job-1',
+    jobTitle: 'AC repair',
+    payload: null,
+    baseVersion: 2,
+    occurredAt: '2026-09-27T09:00:00.000Z',
+    status: 'conflict',
+    attempts: 0,
+    nextAttemptAt: null,
+    lastAttemptAt: null,
+    lastError: { code: 'INVALID_STATUS_TRANSITION', message: 'x' },
+    createdAt: '2026-09-27T09:00:00.000Z',
+    ...overrides,
+  });
+
+  it('explains a state conflict and a lost assignment differently', () => {
+    expect(describeProblem(problem({}))).toBe(
+      '“Start job” on AC repair was not applied: the job changed while you were offline. The latest version is shown.',
+    );
+    expect(
+      describeProblem(
+        problem({ lastError: { code: 'NOT_FOUND', message: 'x' } }),
+      ),
+    ).toContain('no longer assigned to you');
+  });
+
+  it('explains failures', () => {
+    expect(
+      describeProblem(
+        problem({
+          status: 'failed',
+          type: 'job.note.add',
+          attempts: 10,
+          lastError: { code: 'SERVICE_UNAVAILABLE', message: 'x' },
+        }),
+      ),
+    ).toContain('could not be delivered after 10 attempts');
+    expect(
+      describeProblem(
+        problem({
+          status: 'failed',
+          lastError: { code: 'VALIDATION_ERROR', message: 'x' },
+        }),
+      ),
+    ).toContain('refused by the server (VALIDATION_ERROR)');
+  });
+});
+
+describe('describeSync', () => {
+  const status = (overrides: object) => ({
+    phase: 'idle' as const,
+    pending: 0,
+    failed: 0,
+    conflicts: 0,
+    lastSyncedAt: null,
+    ...overrides,
+  });
+
+  it('says nothing when everything is synced', () => {
+    expect(describeSync(status({}))).toBeNull();
+    expect(describeSync(null)).toBeNull();
+  });
+
+  it('reassures while offline, and asks for attention on problems first', () => {
+    expect(describeSync(status({ phase: 'offline', pending: 3 }))).toEqual({
+      message:
+        '3 changes saved on this phone. They will sync when you are back online.',
+      tone: 'warning',
+    });
+    expect(
+      describeSync(status({ pending: 1, phase: 'syncing' }))?.message,
+    ).toBe('Syncing 1 change…');
+    expect(
+      describeSync(status({ pending: 2, conflicts: 1, phase: 'offline' })),
+    ).toEqual({
+      message: '1 change needs attention (Profile › Sync).',
+      tone: 'danger',
+    });
   });
 });

@@ -285,6 +285,25 @@ export class LocalJobStore {
     return entry;
   }
 
+  /**
+   * The worker asks to try a failed entry again (for example after a long server outage
+   * used up its retries). Conflicts cannot be retried: the server state has moved on.
+   */
+  async retry(seq: number): Promise<void> {
+    const now = this.now().toISOString();
+    await this.write(tx => {
+      tx.run(
+        `UPDATE outbox SET status = 'pending', attempts = 0, next_attempt_at = NULL,
+           updated_at = ? WHERE seq = ? AND status = 'failed'`,
+        [now, seq],
+      );
+      const [row] = tx.all('SELECT job_id FROM outbox WHERE seq = ?', [seq]);
+      if (row !== undefined) {
+        this.reproject(tx, text(row, 'job_id'));
+      }
+    });
+  }
+
   /** The worker acknowledges a rejected entry; it leaves the attention list. */
   async dismiss(seq: number): Promise<void> {
     await this.write(tx => {
