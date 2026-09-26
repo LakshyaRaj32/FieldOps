@@ -10,7 +10,8 @@ How to set up, work in and contribute to the FieldOps repository.
 | npm | 10+ (bundled with Node) | V0 |
 | Git | 2.39+ | V0 |
 | JDK | 17 (the version React Native requires for Android builds) | V1 |
-| Android Studio, Android SDK, emulator | Current stable | V1 |
+| Android SDK + platform-tools (adb), Android Studio optional | Current stable, `ANDROID_HOME` set | V1 |
+| Android phone with USB debugging (an emulator is optional) | Android 7+ (minSdk 24) | V1 |
 | Docker Desktop (or Docker Engine with Compose v2) | Current stable | V3 |
 
 Use a Node version manager (`nvm`, `fnm`, or `nvm-windows`) so the `.nvmrc` version is used.
@@ -22,12 +23,16 @@ git clone <repository-url> FieldOps
 cd FieldOps
 npm install        # installs the workspace toolchain and links workspace packages
 npm run typecheck  # type-checks every workspace that defines a typecheck script
+npm run lint
+npm test
 ```
+
+Running the Android app: [mobile-development.md](mobile-development.md).
 
 ## Repository layout
 
 ```text
-apps/mobile      React Native app (generated in V1)
+apps/mobile      React Native app (foundation built in V1)
 apps/api         NestJS API (generated in V3)
 packages/config  Shared tooling config (tsconfig base)
 packages/types   Shared domain types (Role, ...)
@@ -41,9 +46,17 @@ docs/            Architecture and decisions
 | Script | What it does |
 | --- | --- |
 | `npm run typecheck` | Runs `typecheck` in every workspace that defines it |
+| `npm run lint` | Runs `lint` in every workspace that defines it |
+| `npm test` | Runs `test` in every workspace that defines it |
+| `npm run mobile:start` | Starts Metro for the mobile app |
+| `npm run mobile:android` | Builds, installs and launches the debug app on the connected phone (active ABI only) |
 
-More scripts (`lint`, `test`, `format`, `dev:api`, `android`) are added in the version that
-introduces the tooling they run.
+More scripts (for example `dev:api`) are added in the version that introduces the tooling
+they run.
+
+**Root-level dev dependencies.** `typescript` and `eslint` are declared at the root so npm
+installs exactly one version of each for every workspace (see
+[technology-decisions.md](technology-decisions.md#mobile-quality-tooling)).
 
 ## Working with workspaces
 
@@ -77,8 +90,9 @@ The primary development machine runs Windows. To avoid common problems:
   `.gitattributes` decide.
 - **Long paths.** Android and `node_modules` paths can exceed 260 characters. Enable them with
   `git config --system core.longpaths true` (as administrator) and Windows long path support.
-- **Short project path.** Keep the repository near a drive root (for example `L:\FieldOps`) to
-  stay well within Gradle and CMake path limits.
+- **Short project path.** Keep the repository near a drive root (it lives at
+  `L:\Projects\FieldOps`) to stay well within Gradle and CMake path limits. The native C++
+  builds (Reanimated, MMKV, Nitro) are the most sensitive to long paths.
 - **Android emulator networking.** The emulator reaches the host machine at `10.0.2.2`.
 - **Shells.** Scripts in `package.json` must work in both PowerShell and POSIX shells. Avoid
   shell-specific syntax.

@@ -1,8 +1,8 @@
 # FieldOps Architecture
 
-> Status: **Version 0 (design).** This document describes the target architecture. Anything
-> not yet built is labeled with the version that introduces it. For the reasoning behind each
-> technology, see [technology-decisions.md](technology-decisions.md).
+> Status: **target architecture; built through Version 1** (repository foundation and mobile
+> app foundation). Anything not yet built is labeled with the version that introduces it. For
+> the reasoning behind each technology, see [technology-decisions.md](technology-decisions.md).
 
 ## 1. Purpose
 

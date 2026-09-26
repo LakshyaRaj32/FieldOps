@@ -27,14 +27,16 @@ for infrastructure. Build the FieldOps-specific systems ourselves.**
 | --- | --- | --- |
 | Language | TypeScript (strict) everywhere, Kotlin for Android native code | V0 / V7 |
 | Monorepo | npm workspaces | V0 |
-| Mobile framework | React Native (Community CLI, New Architecture, Hermes) | V1 |
-| Navigation | React Navigation | V1 |
+| Mobile framework | React Native 0.87 (Community CLI, New Architecture, Hermes) | V1 |
+| Navigation | React Navigation 7 (native stack + bottom tabs) | V1 |
 | UI / session state | Redux Toolkit | V1 |
-| Server state (online-only) | RTK Query | V2 |
+| Server state (online-only) | RTK Query (base API in V1, first real endpoints from V2) | V1 |
+| Mobile environment config | react-native-config (per-build-type dotenv files) | V1 |
 | Local database | SQLite (library selected in V5) | V5 |
-| Key-value storage | MMKV | V1–V2 |
-| Connectivity signal | NetInfo | V5–V6 |
-| Animations | React Native Reanimated | V1 / V14 |
+| Key-value storage | MMKV 4 (on Nitro Modules) | V1 |
+| Connectivity signal | NetInfo | V1 |
+| Animations | React Native Reanimated 4 (with react-native-worklets) | V1 / V14 |
+| Mobile quality tooling | TypeScript 6.0, ESLint 9 (flat config), Prettier, Jest | V1 |
 | Native modules | Kotlin Turbo Modules | V7 |
 | Backend framework | NestJS | V3 (auth endpoints in V2; see roadmap note) |
 | Database | PostgreSQL | V3 |
@@ -83,7 +85,14 @@ server.
 
 **Configuration.** `packages/config/tsconfig.base.json` enables `strict`,
 `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride` and related
-flags. Workspaces may add strictness but may not weaken it.
+flags. Workspaces may add strictness but may not weaken it. The mobile app extends this base
+**and** `@react-native/typescript-config`, in that order: React Native controls runtime options
+(`lib`, `jsx`, module resolution) and FieldOps' extra strictness flags are kept.
+
+**Version: TypeScript 6.0** (decided in V1). V0 installed TypeScript 7 (the native compiler),
+but typescript-eslint supports only TypeScript below 6.1, and linting is required. The whole
+repository uses one version (`~6.0.3` at the root), so npm installs a single copy. Revisit when
+typescript-eslint supports TypeScript 7.
 
 **Limitation.** Types disappear at runtime. External data is always validated with runtime
 schemas at trust boundaries.
@@ -217,6 +226,64 @@ last-used filters, onboarding completion, the device ID, UI preferences. It is n
 Domain data never goes into MMKV, and neither do secrets unless they are encrypted with a key
 held in the Android Keystore.
 
+**V1 use.** The theme preference. Because MMKV reads synchronously, the first frame already
+renders in the user's chosen theme, with no flash of the wrong theme.
+
+**Version.** MMKV 4, which is built on **react-native-nitro-modules** (a required peer
+dependency). MMKV 3 is no longer the maintained line. Only `src/services/storage` may import
+MMKV (enforced by ESLint), and every key is declared in one typed list.
+
+**Alternatives.** AsyncStorage (asynchronous, so the first render would need a loading state,
+and slower), SharedPreferences through a custom native module (reinventing a solved problem).
+
+## Mobile environment configuration (react-native-config)
+
+**Why.** The app must switch between the local, staging and production APIs **without code
+changes**. Each Android build type reads its own dotenv file from `apps/mobile/`:
+
+| Build type | File | Use |
+| --- | --- | --- |
+| `debug` (and `debugOptimized`) | `.env.development` | Daily development with Metro |
+| `staging` | `.env.staging` | Release-like build against the staging API; installs next to the dev build |
+| `release` | `.env.production` | Production |
+
+A single build can be pointed elsewhere with the `ENVFILE` environment variable, for example a
+debug build against staging.
+
+react-native-config compiles the values into the APK's `BuildConfig` and exposes them to
+JavaScript. The environment therefore belongs to the binary: a given APK cannot pick up another
+build's JS configuration by accident. Values are validated at startup (`src/app/config/env.ts`).
+Invalid configuration shows an explanatory error screen, and `https` is required outside
+development.
+
+**Security.** Environment configuration is **not** a security boundary. Everything in these
+files is readable by anyone with the APK, so they contain public settings only (they are
+committed for that reason) and never secrets.
+
+**Alternatives.** Babel inlining of environment variables (values baked into the JS bundle, so
+build type and bundle can disagree, and Metro's cache must be reset on every change), Android
+product flavors (would stop the plain `npx react-native run-android` from working, because Gradle
+task names become ambiguous), a custom Kotlin module reading `BuildConfig` (reinventing
+react-native-config; Kotlin modules start in V7).
+
+## Mobile quality tooling
+
+| Tool | Version | Notes |
+| --- | --- | --- |
+| TypeScript | 6.0 | See the TypeScript section |
+| ESLint | 9, flat config (`eslint.config.js`) | `@react-native/eslint-config` supports ESLint 8 and 9, not 10. ESLint 8 is end-of-life, so 9 is the newest supported option (npm reports 9 as deprecated too; revisit when React Native supports ESLint 10). ESLint is declared at the root as well as in the app, because npm otherwise installs ESLint 8 at the root to satisfy the hoisted plugins' peer dependencies |
+| Prettier | 2.8.8 | Version pinned by the React Native template |
+| Jest | 29 with `@react-native/jest-preset` | Version pinned by the React Native template |
+
+Known upstream issues, and how they are handled:
+
+- `@react-native/eslint-config` 0.87 bundles `eslint-plugin-ft-flow` 2.x, which crashes on
+  ESLint 9. FieldOps has no Flow code, so `eslint.config.js` drops only the Flow block.
+- Redux Toolkit's packages resolve to ES-module builds under Jest's `react-native` export
+  condition, so they are added to `transformIgnorePatterns`.
+- `fetchBaseQuery`'s timeout helper leaves a timer running after each request (harmless in the
+  app). The one test file that exercises it uses fake timers so Jest exits cleanly.
+
 ## Redux Toolkit
 
 **Why.** Predictable, debuggable state for things that genuinely belong to the app session:
@@ -299,7 +366,8 @@ sampling policy and handoff to the sync engine.
 | **npm workspaces** | Already bundled with Node, and hoisting works smoothly with Metro in monorepos. pnpm's symlinked layout needs extra Metro configuration. Turborepo or Nx can be added later if build times justify it. |
 | **React Navigation** | The standard, well-maintained navigation library for React Native. Supports nested role-based navigators and deep links. |
 | **NetInfo** | Standard connectivity signal. Used only as a *hint*: the real signal is whether requests succeed. |
-| **Reanimated** | Animations and gestures run on the UI thread, keeping list and interaction performance smooth on mid-range Android devices. |
+| **Reanimated** | Animations and gestures run on the UI thread, keeping list and interaction performance smooth on mid-range Android devices. Reanimated 4 needs `react-native-worklets` and its Babel plugin. V1 uses it for the connectivity banner, which also proves the native setup early. |
+| **react-native-screens, react-native-safe-area-context** | Required by React Navigation's native stack and by edge-to-edge layouts (Android 15+ draws behind system bars). |
 | **FCM** | The standard Android push channel. Delivery is not guaranteed, so push is a hint and sync is the truth. |
 | **S3-compatible object storage** | Binary media does not belong in Postgres. Presigned uploads keep large bodies off the API. MinIO locally, a managed S3-compatible store in production. |
 | **Argon2id and a standard JWT library** | Proven cryptography. We never implement crypto primitives. |
@@ -310,7 +378,6 @@ These are deliberately deferred to the version where the information to decide e
 
 | Decision | Decide in | Leading option |
 | --- | --- | --- |
-| TypeScript major version for linting | V1 | V0 installs TypeScript 7 (native compiler) for `tsc`. If typescript-eslint or React Native tooling does not yet support it, pin to the newest version they support |
 | SQLite library | V5 | op-sqlite or expo-sqlite |
 | Runtime schema library for shared contracts | V3 | Zod schemas in `@fieldops/shared`, integrated with Nest validation and OpenAPI |
 | How the API consumes workspace packages (compiled vs source) | V3 | Compile shared packages with `tsc` project references |
@@ -319,3 +386,12 @@ These are deliberately deferred to the version where the information to decide e
 | Hosting target | V16 | A managed container platform or a single VM with Compose; managed Postgres and Redis |
 | LLM provider | V17 | Behind a provider-neutral interface. Anthropic Claude is the initial candidate |
 | Crash reporting | V15 | Sentry or an equivalent |
+| Tab icons / icon library | V14 | react-native-svg with a small icon set. V1 uses a text label with an active indicator to avoid an extra native dependency |
+
+## Resolved decisions
+
+| Decision | Resolved in | Outcome |
+| --- | --- | --- |
+| TypeScript major version | V1 | TypeScript 6.0 across the repository (typescript-eslint requires < 6.1) |
+| ESLint version and config format | V1 | ESLint 9 with flat config (the newest version React Native's config supports) |
+| Mobile environment configuration | V1 | react-native-config with per-build-type dotenv files |

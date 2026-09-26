@@ -1,0 +1,25 @@
+// FieldOps lives in an npm-workspaces monorepo: node_modules are hoisted to the repository
+// root, so React Native packages are located with Node's own module resolution instead of
+// fixed relative paths. This keeps the build correct whether a package is hoisted or not.
+pluginManagement {
+    def reactNativeGradlePlugin = new File(
+        providers.exec {
+            workingDir(rootDir)
+            commandLine("node", "--print", "require('path').dirname(require.resolve('@react-native/gradle-plugin/package.json', { paths: [require('path').dirname(require.resolve('react-native/package.json'))] }))")
+        }.standardOutput.asText.get().trim()
+    ).absolutePath
+    includeBuild(reactNativeGradlePlugin)
+}
+plugins { id("com.facebook.react.settings") }
+extensions.configure(com.facebook.react.ReactSettingsExtension) { ex -> ex.autolinkLibrariesFromCommand() }
+rootProject.name = 'FieldOps'
+include ':app'
+
+// Second include (outside pluginManagement) resolves the plugin's classpath dependency in
+// android/build.gradle. pluginManagement variables are not visible here, so resolve again.
+includeBuild(new File(
+    providers.exec {
+        workingDir(rootDir)
+        commandLine("node", "--print", "require('path').dirname(require.resolve('@react-native/gradle-plugin/package.json', { paths: [require('path').dirname(require.resolve('react-native/package.json'))] }))")
+    }.standardOutput.asText.get().trim()
+).absolutePath)

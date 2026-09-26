@@ -89,5 +89,59 @@ FieldOps is built in small, complete versions. Each version has a focused scope 
 
 ### Handoff
 
-- [ ] Initial commit created and tagged `v0.0.0` (done by the repository owner)
+- [x] Initial commit created and tagged `v0.0.0` (done by the repository owner)
 - [ ] V2/V3 sequencing decision made before starting V2
+
+---
+
+## Version 1 completion checklist
+
+Project location: `L:\Projects\FieldOps` (a clone of the V0 repository; same GitHub remote).
+
+### Implementation
+
+- [x] React Native 0.87.1 project under `apps/mobile` (Community CLI template, New
+      Architecture, Hermes; iOS project removed, since Android is the target platform)
+- [x] Monorepo integration: Gradle and Metro resolve hoisted packages; `@fieldops/types` is
+      consumed by the app
+- [x] TypeScript configured (FieldOps strict base + React Native config)
+- [x] Feature-based architecture (`app`, `components`, `features`, `hooks`, `services`,
+      `store`, `theme`, `utils`); deviations documented in
+      [mobile-architecture.md](mobile-architecture.md#deviations-from-the-version-1-brief-and-why)
+- [x] Navigation foundation: `RootNavigator` → `AuthNavigator` (Login) / `AppNavigator`
+      (Dashboard, Jobs, Notifications, Profile); temporary development entry
+- [x] Redux Toolkit store with application state (session, connectivity)
+- [x] RTK Query foundation (empty base API, central base query, RN focus/reconnect listeners)
+- [x] Network connectivity state (online / offline / checking / unknown, with recovery
+      tracking and banner)
+- [x] Environment/API configuration (react-native-config; debug/staging/release; validated
+      at startup; no secrets)
+- [x] Basic reusable UI components (Screen, AppText, Button, Card, Badge, SegmentedControl,
+      Loading/Error/Empty states)
+- [x] Theme foundation (tokens, light/dark, persisted preference in MMKV)
+- [x] Error handling foundation (AppError model, error boundary, global handler, logger)
+- [x] No future features implemented (no real auth, SQLite, sync, location, WebSockets,
+      push, uploads, backend)
+
+### Verification
+
+- [x] `npm run typecheck` passes
+- [x] `npm run lint` passes with 0 warnings
+- [x] `npm test` passes (7 suites, 55 tests)
+- [x] Prettier check passes
+- [ ] Android build succeeds (`npm run mobile:android`), run by the repository owner
+- [ ] App installs and launches on the physical phone
+- [ ] Navigation and basic UI verified on the phone (see the manual test list in
+      [mobile-development.md](mobile-development.md))
+
+### Documentation
+
+- [x] `docs/mobile-development.md` created
+- [x] `README.md` updated (status, current version, prerequisites, running the app)
+- [x] `docs/mobile-architecture.md`, `docs/technology-decisions.md`, `docs/development.md`,
+      `apps/mobile/README.md` updated
+
+### Handoff
+
+- [ ] Version 1 committed and pushed; working tree clean
+- [ ] Tagged `v0.1.0`

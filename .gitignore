@@ -31,6 +31,11 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
+# Mobile env files are public build configuration compiled into the APK (never secrets),
+# so they are committed. See apps/mobile/.env.example.
+!apps/mobile/.env.development
+!apps/mobile/.env.staging
+!apps/mobile/.env.production
 *.pem
 *.p12
 *.key
@@ -53,6 +58,7 @@ local.properties
 *.aab
 *.hprof
 captures/
+.kotlin/
 
 # iOS (not a target platform yet, but keep generated artifacts out)
 **/ios/Pods/

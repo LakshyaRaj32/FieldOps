@@ -1,0 +1,133 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.facebook.react"
+
+/**
+ * Resolves an npm package directory with Node's module resolution. Required because the
+ * npm-workspaces monorepo hoists packages to the repository root (see settings.gradle).
+ */
+def resolveNodePackageDir = { String packageName ->
+    new File(
+        providers.exec {
+            workingDir(rootDir)
+            commandLine("node", "--print", "require('path').dirname(require.resolve('${packageName}/package.json', { paths: [require('path').dirname(require.resolve('react-native/package.json'))] }))")
+        }.standardOutput.asText.get().trim()
+    )
+}
+
+// Named differently from the `react.reactNativeDir` property so Groovy does not shadow it.
+def resolvedReactNativeDir = resolveNodePackageDir("react-native")
+
+/**
+ * React Native Gradle plugin configuration.
+ * https://reactnative.dev/docs/react-native-gradle-plugin
+ */
+react {
+    /* Folders: resolved explicitly because of workspace hoisting. */
+    root = file("../../")
+    reactNativeDir = resolvedReactNativeDir
+    codegenDir = resolveNodePackageDir("@react-native/codegen")
+    cliFile = new File(resolvedReactNativeDir, "cli.js")
+
+    /* Variants: debuggable variants load JS from Metro; every other variant bundles it. */
+    debuggableVariants = ["debug", "debugOptimized"]
+
+    /* Autolinking */
+    autolinkLibrariesWithApp()
+}
+
+/**
+ * Environment configuration (react-native-config).
+ *
+ * Each build type reads a dotenv file from apps/mobile/. Values are public build-time
+ * configuration: they are compiled into the APK and must never contain secrets.
+ * Setting the ENVFILE environment variable overrides this mapping for a single build.
+ * See docs/mobile-development.md#api-environments.
+ */
+project.ext.defaultEnvFile = ".env.development"
+project.ext.envConfigFiles = [
+    debugoptimized: ".env.development",
+    debug         : ".env.development",
+    staging       : ".env.staging",
+    release       : ".env.production",
+]
+
+// Fail fast instead of producing an APK with empty configuration.
+def requestedTasks = gradle.startParameter.taskNames.join(" ").toLowerCase()
+if (!System.env['ENVFILE']) {
+    project.ext.envConfigFiles.each { variant, envFile ->
+        if (requestedTasks.contains(variant) && !file("../../${envFile}").exists()) {
+            throw new GradleException(
+                "Missing apps/mobile/${envFile} required by '${variant}' builds. " +
+                "Copy apps/mobile/.env.example and fill it in (see docs/mobile-development.md).")
+        }
+    }
+}
+
+apply from: project(':react-native-config').projectDir.getPath() + "/dotenv.gradle"
+
+/**
+ * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
+ */
+def enableProguardInReleaseBuilds = false
+
+/**
+ * The preferred build flavor of JavaScriptCore (JSC). Only used when Hermes is disabled.
+ */
+def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
+
+android {
+    ndkVersion rootProject.ext.ndkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
+    compileSdk rootProject.ext.compileSdkVersion
+
+    namespace "com.fieldops.mobile"
+    defaultConfig {
+        applicationId "com.fieldops.mobile"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "0.1.0"
+    }
+    buildFeatures {
+        // react-native-config exposes env values to JS through BuildConfig.
+        buildConfig true
+    }
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            // Release signing is configured in Version 16. Until then release and staging builds
+            // are signed with the debug keystore and are for local testing only.
+            signingConfig signingConfigs.debug
+            minifyEnabled enableProguardInReleaseBuilds
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+        staging {
+            // Release-like build pointed at the staging API. Installs next to the dev build.
+            initWith release
+            applicationIdSuffix ".staging"
+            matchingFallbacks = ["release"]
+        }
+    }
+}
+
+dependencies {
+    // The version of react-native is set by the React Native Gradle Plugin
+    implementation("com.facebook.react:react-android")
+
+    if (hermesEnabled.toBoolean()) {
+        implementation("com.facebook.react:hermes-android")
+    } else {
+        implementation jscFlavor
+    }
+}

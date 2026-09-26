@@ -12,9 +12,14 @@
     "npm": ">=10"
   },
   "scripts": {
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "mobile:start": "npm run start -w @fieldops/mobile",
+    "mobile:android": "npm run android -w @fieldops/mobile"
   },
   "devDependencies": {
-    "typescript": "^7.0.2"
+    "eslint": "^9.39.5",
+    "typescript": "~6.0.3"
   }
 }

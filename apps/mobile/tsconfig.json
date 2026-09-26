@@ -1,0 +1,11 @@
+{
+  // FieldOps strictness baseline first, then React Native's runtime settings (lib, jsx,
+  // module resolution) on top. Later entries win, so RN controls runtime options while the
+  // extra strictness flags from @fieldops/config are preserved.
+  "extends": [
+    "@fieldops/config/tsconfig.base.json",
+    "@react-native/typescript-config"
+  ],
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["**/node_modules", "android"]
+}
