@@ -146,63 +146,69 @@ export interface JobCommand {
 }
 
 /**
- * The commands to show for a job: exactly the actions the server says the signed-in user may
- * perform now, in the server's order. Nothing the server would reject is ever offered, and
- * the client makes no role or status decisions of its own.
+ * The command buttons to show for a job: exactly the actions the user may perform now, in
+ * the server's order (for a worker's job on the device: predicted with the same state
+ * machine the server enforces). Nothing the server would reject is offered. Adding a note has
+ * its own input, so it is not a button.
  */
 export function jobCommands(
   job: Pick<JobSummary, 'allowedActions' | 'assignedWorker'>,
 ): JobCommand[] {
-  return job.allowedActions.map(action => {
-    switch (action) {
-      case JobAction.START:
-        return { action, label: 'Start job', variant: 'primary' };
-      case JobAction.COMPLETE:
-        return {
-          action,
-          label: 'Complete job',
-          variant: 'primary',
-          confirm: {
-            title: 'Complete this job?',
-            message:
-              'The job will be marked as completed. This cannot be undone.',
-            confirmLabel: 'Complete',
-          },
-        };
-      case JobAction.ASSIGN:
-        return {
-          action,
-          label:
-            job.assignedWorker === null ? 'Assign worker' : 'Reassign worker',
-          variant: job.assignedWorker === null ? 'primary' : 'secondary',
-        };
-      case JobAction.EDIT:
-        return { action, label: 'Edit details', variant: 'secondary' };
-      case JobAction.CANCEL:
-        return {
-          action,
-          label: 'Cancel job',
-          variant: 'danger',
-          confirm: {
-            title: 'Cancel this job?',
-            message:
-              'The job will be closed and the worker can no longer work on it.',
-            confirmLabel: 'Cancel job',
-          },
-        };
-      case JobAction.DELETE:
-        return {
-          action,
-          label: 'Delete job',
-          variant: 'danger',
-          confirm: {
-            title: 'Delete this job?',
-            message: 'The job will be removed permanently.',
-            confirmLabel: 'Delete',
-          },
-        };
-    }
+  return job.allowedActions.flatMap(action => {
+    const command = commandFor(action, job.assignedWorker !== null);
+    return command === null ? [] : [command];
   });
+}
+
+function commandFor(action: JobAction, assigned: boolean): JobCommand | null {
+  switch (action) {
+    case JobAction.START:
+      return { action, label: 'Start job', variant: 'primary' };
+    case JobAction.COMPLETE:
+      return {
+        action,
+        label: 'Complete job',
+        variant: 'primary',
+        confirm: {
+          title: 'Complete this job?',
+          message: 'The job will be marked as completed. This cannot be undone.',
+          confirmLabel: 'Complete',
+        },
+      };
+    case JobAction.ASSIGN:
+      return {
+        action,
+        label: assigned ? 'Reassign worker' : 'Assign worker',
+        variant: assigned ? 'secondary' : 'primary',
+      };
+    case JobAction.EDIT:
+      return { action, label: 'Edit details', variant: 'secondary' };
+    case JobAction.CANCEL:
+      return {
+        action,
+        label: 'Cancel job',
+        variant: 'danger',
+        confirm: {
+          title: 'Cancel this job?',
+          message:
+            'The job will be closed and the worker can no longer work on it.',
+          confirmLabel: 'Cancel job',
+        },
+      };
+    case JobAction.DELETE:
+      return {
+        action,
+        label: 'Delete job',
+        variant: 'danger',
+        confirm: {
+          title: 'Delete this job?',
+          message: 'The job will be removed permanently.',
+          confirmLabel: 'Delete',
+        },
+      };
+    case JobAction.NOTE:
+      return null;
+  }
 }
 
 /** One line of job history, for example "Assigned to Asha Verma by Ravi Kumar". */

@@ -14,6 +14,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@fieldops/shared": "*",
     "@fieldops/types": "*",
     "@react-native-community/netinfo": "^12.0.1",
     "@react-navigation/bottom-tabs": "^7.19.2",
