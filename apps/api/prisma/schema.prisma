@@ -36,19 +36,23 @@ enum SessionRevocationReason {
 }
 
 model User {
-  id           String    @id @default(uuid(7)) @db.Uuid
+  id             String     @id @default(uuid(7)) @db.Uuid
   /// Stored trimmed and lower-cased by the application, so the plain unique index enforces
   /// case-insensitive uniqueness.
-  email        String    @unique @db.VarChar(254)
+  email          String     @unique @db.VarChar(254)
   /// Argon2id PHC string (algorithm, parameters, salt and hash). Never the password.
-  passwordHash String    @map("password_hash")
-  firstName    String    @map("first_name") @db.VarChar(100)
-  lastName     String    @map("last_name") @db.VarChar(100)
-  role         Role      @default(WORKER)
-  isActive     Boolean   @default(true) @map("is_active")
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  sessions     Session[]
+  passwordHash   String     @map("password_hash")
+  firstName      String     @map("first_name") @db.VarChar(100)
+  lastName       String     @map("last_name") @db.VarChar(100)
+  role           Role       @default(WORKER)
+  isActive       Boolean    @default(true) @map("is_active")
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sessions       Session[]
+  assignedJobs   Job[]      @relation("JobAssignedWorker")
+  createdJobs    Job[]      @relation("JobCreatedBy")
+  jobActions     JobEvent[] @relation("JobEventActor")
+  jobAssignments JobEvent[] @relation("JobEventAssignee")
 
   @@map("users")
 }
@@ -76,4 +80,108 @@ model Session {
   /// Postgres does not index foreign keys automatically.
   @@index([userId])
   @@map("sessions")
+}
+
+/// Must stay identical to JobStatus in @fieldops/types (checked in src/jobs/job-enums.ts).
+/// Allowed transitions live in src/jobs/domain/job-state-machine.ts.
+enum JobStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum JobPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum JobEventType {
+  CREATED
+  ASSIGNED
+  STARTED
+  COMPLETED
+  CANCELLED
+}
+
+/// A unit of field work. Manager-owned fields (title, customer, address, schedule...) are
+/// edited through PATCH with optimistic concurrency on `version`; status changes only through
+/// the action endpoints, which also append a JobEvent. Hand-written CHECK constraints in the
+/// migration keep status and assignment consistent.
+model Job {
+  id                 String             @id @default(uuid(7)) @db.Uuid
+  title              String             @db.VarChar(200)
+  description        String?            @db.VarChar(5000)
+  customerName       String             @map("customer_name") @db.VarChar(200)
+  address            String             @db.VarChar(500)
+  /// WGS 84. Both set or both null (CHECK constraint).
+  latitude           Float?             @db.DoublePrecision
+  longitude          Float?             @db.DoublePrecision
+  scheduledAt        DateTime           @map("scheduled_at") @db.Timestamptz(3)
+  priority           JobPriority        @default(NORMAL)
+  status             JobStatus          @default(PENDING)
+  /// The current assignee (a WORKER). Assignment history is in job_events.
+  assignedWorkerId   String?            @map("assigned_worker_id") @db.Uuid
+  assignedWorker     User?              @relation("JobAssignedWorker", fields: [assignedWorkerId], references: [id], onDelete: Restrict)
+  /// Instructions from the manager. Worker notes arrive as job events with offline sync.
+  notes              String?            @db.VarChar(5000)
+  cancellationReason String?            @map("cancellation_reason") @db.VarChar(500)
+  createdById        String             @map("created_by_id") @db.Uuid
+  createdBy          User               @relation("JobCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  /// Optimistic concurrency: incremented on every change (edits and transitions).
+  version            Int                @default(1)
+  startedAt          DateTime?          @map("started_at") @db.Timestamptz(3)
+  completedAt        DateTime?          @map("completed_at") @db.Timestamptz(3)
+  cancelledAt        DateTime?          @map("cancelled_at") @db.Timestamptz(3)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  checklistItems     JobChecklistItem[]
+  events             JobEvent[]
+
+  /// A worker's job list, ordered by schedule (also indexes the foreign key).
+  @@index([assignedWorkerId, scheduledAt])
+  /// Manager lists filtered by status, ordered by schedule.
+  @@index([status, scheduledAt])
+  /// Unfiltered manager list: keyset pagination on (scheduled_at, id).
+  @@index([scheduledAt, id])
+  @@map("jobs")
+}
+
+/// A checklist item defined by the manager. Completion (by the worker) is added with
+/// checklist execution in a later phase.
+model JobChecklistItem {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  jobId     String   @map("job_id") @db.Uuid
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  position  Int
+  label     String   @db.VarChar(200)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// Loads a job's checklist in order; one item per position.
+  @@unique([jobId, position])
+  @@map("job_checklist_items")
+}
+
+/// Append-only history of a job: creation, assignments and status changes. Written in the
+/// same transaction as the change it records. Never updated or deleted through the API
+/// (rows go only with their job, which can be deleted only while PENDING).
+model JobEvent {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  jobId      String       @map("job_id") @db.Uuid
+  job        Job          @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  type       JobEventType
+  fromStatus JobStatus?   @map("from_status")
+  toStatus   JobStatus    @map("to_status")
+  actorId    String       @map("actor_id") @db.Uuid
+  actor      User         @relation("JobEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+  assigneeId String?      @map("assignee_id") @db.Uuid
+  assignee   User?        @relation("JobEventAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// A job's history in order (the details screen).
+  @@index([jobId, createdAt])
+  @@map("job_events")
 }
