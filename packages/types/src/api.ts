@@ -30,6 +30,14 @@ export type ApiErrorCode =
   | 'FORBIDDEN'
   | 'NOT_FOUND'
   | 'CONFLICT'
+  /** The job's status does not allow this action (for example completing a PENDING job). */
+  | 'INVALID_STATUS_TRANSITION'
+  /** The job can no longer be edited or deleted in its current status. */
+  | 'JOB_NOT_EDITABLE'
+  /** The worker to assign does not exist, is disabled or is not a WORKER. */
+  | 'INVALID_ASSIGNEE'
+  /** The resource changed since the client read it: refetch and retry. */
+  | 'VERSION_CONFLICT'
   | 'PAYLOAD_TOO_LARGE'
   | 'INTERNAL_ERROR'
   | 'SERVICE_UNAVAILABLE';
