@@ -4,7 +4,7 @@ import {
   ApiPropertyOptional,
   type ApiPropertyOptions,
 } from '@nestjs/swagger';
-import type { GeoPoint } from '@fieldops/types';
+import type { DeviceLocation, GeoPoint } from '@fieldops/types';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -37,6 +37,7 @@ export const JOB_LIMITS = {
   checklistItem: 200,
   cancellationReason: 500,
   note: 2000,
+  message: 2000,
 } as const;
 
 /**
@@ -86,7 +87,7 @@ export function ScheduledAtField(required: boolean): PropertyDecorator {
 }
 
 /** When something happened on the device. Stored as given: device clocks are informational. */
-export function OccurredAtField(): PropertyDecorator {
+export function OccurredAtField(label = 'Occurred at'): PropertyDecorator {
   return applyDecorators(
     ApiProperty({
       format: 'date-time',
@@ -95,10 +96,10 @@ export function OccurredAtField(): PropertyDecorator {
     }),
     IsISO8601(
       { strict: true },
-      { message: 'Occurred at must be an ISO 8601 date-time.' },
+      { message: `${label} must be an ISO 8601 date-time.` },
     ),
     Matches(/(Z|[+-]\d{2}:\d{2})$/, {
-      message: 'Occurred at must include a time zone (Z or +hh:mm).',
+      message: `${label} must include a time zone (Z or +hh:mm).`,
     }),
   );
 }
@@ -173,4 +174,56 @@ export function ChecklistField(): PropertyDecorator {
       message: `Checklist items must be at most ${max} characters.`,
     }),
   );
+}
+
+/**
+ * A fix from the worker's phone. Bounds are checked here; the fix itself is device data and
+ * is never trusted for authorization (docs/location.md, "Trust boundary").
+ */
+export class DeviceLocationDto implements DeviceLocation {
+  @ApiProperty({ minimum: -90, maximum: 90, example: 12.9716 })
+  @IsNumber(
+    { allowNaN: false, allowInfinity: false },
+    { message: 'Latitude must be a number.' },
+  )
+  @Min(-90, { message: 'Latitude must be between -90 and 90.' })
+  @Max(90, { message: 'Latitude must be between -90 and 90.' })
+  readonly latitude: number;
+
+  @ApiProperty({ minimum: -180, maximum: 180, example: 77.5946 })
+  @IsNumber(
+    { allowNaN: false, allowInfinity: false },
+    { message: 'Longitude must be a number.' },
+  )
+  @Min(-180, { message: 'Longitude must be between -180 and 180.' })
+  @Max(180, { message: 'Longitude must be between -180 and 180.' })
+  readonly longitude: number;
+
+  @ApiProperty({
+    minimum: 0,
+    maximum: 100_000,
+    example: 12.5,
+    description: 'Accuracy radius in meters, as reported by the phone.',
+  })
+  @IsNumber(
+    { allowNaN: false, allowInfinity: false },
+    { message: 'Accuracy must be a number.' },
+  )
+  @Min(0, { message: 'Accuracy must be between 0 and 100000 meters.' })
+  @Max(100_000, { message: 'Accuracy must be between 0 and 100000 meters.' })
+  readonly accuracyMeters: number;
+
+  @ApiProperty({
+    format: 'date-time',
+    example: '2026-09-27T10:40:00+05:30',
+    description: 'Device time of the fix, with a time zone offset or Z.',
+  })
+  @IsISO8601(
+    { strict: true },
+    { message: 'Captured at must be an ISO 8601 date-time.' },
+  )
+  @Matches(/(Z|[+-]\d{2}:\d{2})$/, {
+    message: 'Captured at must include a time zone (Z or +hh:mm).',
+  })
+  readonly capturedAt: string;
 }

@@ -37,3 +37,22 @@ jest.mock('react-native-config', () => ({
     API_TIMEOUT_MS: '15000',
   },
 }));
+
+// Push (React Native Firebase): no Firebase app in tests, so push reports "unavailable".
+jest.mock('@react-native-firebase/app', () => ({ getApps: () => [] }));
+jest.mock('@react-native-firebase/messaging', () => ({
+  getMessaging: jest.fn(),
+  getToken: jest.fn(),
+  deleteToken: jest.fn(),
+  onMessage: jest.fn(() => () => undefined),
+  onTokenRefresh: jest.fn(() => () => undefined),
+  onNotificationOpenedApp: jest.fn(() => () => undefined),
+  getInitialNotification: jest.fn(async () => null),
+  setBackgroundMessageHandler: jest.fn(),
+}));
+
+// The image picker opens native activities; tests of photoPicker drive toPickResult directly.
+jest.mock('react-native-image-picker', () => ({
+  launchCamera: jest.fn(async () => ({ didCancel: true })),
+  launchImageLibrary: jest.fn(async () => ({ didCancel: true })),
+}));

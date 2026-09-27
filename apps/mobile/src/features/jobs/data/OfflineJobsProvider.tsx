@@ -10,6 +10,7 @@ import { Role } from '@fieldops/types';
 
 import { useConnectivity } from '../../../hooks/useConnectivity';
 import { openNitroDatabase } from '../../../services/db/nitroDatabase';
+import { evidenceFiles } from '../../../services/files/evidenceFiles';
 import { useAppDispatch, useAppSelector } from '../../../store/hooks';
 import { selectSession } from '../../../store/slices/sessionSlice';
 import { logger } from '../../../utils/logger';
@@ -63,7 +64,8 @@ export function OfflineJobsProvider({
     openOfflineSession(
       { id: me.id, firstName: me.firstName, lastName: me.lastName },
       openNitroDatabase,
-      createApiTransport(dispatch),
+      createApiTransport(dispatch, evidenceFiles),
+      evidenceFiles,
     )
       .then(created => {
         if (!active) {

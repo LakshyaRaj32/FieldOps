@@ -33,6 +33,13 @@ export interface AppConfig {
   /** Browser origins allowed by CORS. Empty means CORS is disabled. */
   readonly corsOrigins: readonly string[];
   readonly swaggerEnabled: boolean;
+  /** Directory of the local-disk object storage (job evidence). Resolved from the cwd. */
+  readonly storageDir: string;
+  /**
+   * Path of the Firebase service-account JSON used to send push notifications (FCM HTTP v1).
+   * Undefined: push is disabled; in-app notifications and realtime still work.
+   */
+  readonly fcmServiceAccountFile: string | undefined;
 }
 
 /** Injection token for AppConfig. */
@@ -150,6 +157,15 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
     );
   }
 
+  const storageDir = read('STORAGE_DIR') || './storage';
+  const fcmServiceAccountFile = read('FCM_SERVICE_ACCOUNT_FILE') || undefined;
+  if (
+    fcmServiceAccountFile !== undefined &&
+    !/\.json$/i.test(fcmServiceAccountFile)
+  ) {
+    errors.push('FCM_SERVICE_ACCOUNT_FILE must be the path of a .json file.');
+  }
+
   if (errors.length > 0) {
     throw new Error(
       `Invalid configuration:\n${errors.map(error => `  - ${error}`).join('\n')}`,
@@ -169,5 +185,7 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
     },
     corsOrigins,
     swaggerEnabled,
+    storageDir,
+    fcmServiceAccountFile,
   };
 }

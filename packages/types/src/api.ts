@@ -41,6 +41,10 @@ export type ApiErrorCode =
   /** The Idempotency-Key (or client-generated ID) was already used for a different request. */
   | 'IDEMPOTENCY_KEY_REUSED'
   | 'PAYLOAD_TOO_LARGE'
+  /** The uploaded file is not one of the accepted types (checked from its bytes). */
+  | 'UNSUPPORTED_FILE_TYPE'
+  /** The job already has the maximum number of evidence files. */
+  | 'EVIDENCE_LIMIT_REACHED'
   | 'INTERNAL_ERROR'
   | 'SERVICE_UNAVAILABLE';
 

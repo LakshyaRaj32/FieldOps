@@ -3,10 +3,13 @@ import type {
   AssignJobRequest,
   CancelJobRequest,
   CreateJobRequest,
+  EvidenceContentType,
+  JobCommandRequest,
   JobDetail,
   JobPage,
   JobStatus,
   JobWorkingSet,
+  SendJobMessageRequest,
   UpdateJobRequest,
   WorkerSummary,
 } from '@fieldops/types';
@@ -68,7 +71,22 @@ export interface WorkerCommandArgs {
   readonly idempotencyKey: string;
 }
 
+/** A photo upload as the sync engine sends it (the file stays on disk until then). */
+export interface EvidenceUploadArgs extends WorkerCommandArgs {
+  readonly evidenceId: string;
+  readonly fileUri: string;
+  readonly contentType: EvidenceContentType;
+  readonly capturedAt: string;
+}
+
 const IDEMPOTENCY_KEY = 'Idempotency-Key';
+
+/** Uploads get far longer than ordinary requests: a photo over 2G takes a while. */
+const UPLOAD_TIMEOUT_MS = 120_000;
+
+/** Where a photo's bytes are served (an authenticated GET; see EvidenceImage). */
+export const evidenceContentPath = (jobId: string, evidenceId: string) =>
+  `${API_V1}/jobs/${jobId}/evidence/${evidenceId}/content`;
 
 /**
  * Job endpoints. Managers use them directly (online screens). Workers never call the command
@@ -85,14 +103,18 @@ export const jobsApi = baseApi
   .injectEndpoints({
     endpoints: build => {
       const command = (path: 'start' | 'complete') =>
-        build.mutation<JobDetail, WorkerCommandArgs>({
-          queryFn: ({ id, idempotencyKey }, _api, _extra, send) =>
+        build.mutation<
+          JobDetail,
+          WorkerCommandArgs & { readonly request?: JobCommandRequest }
+        >({
+          queryFn: ({ id, idempotencyKey, request = {} }, _api, _extra, send) =>
             fetchChecked(
               send,
               {
                 url: `${API_V1}/jobs/${id}/${path}`,
                 method: 'POST',
                 headers: { [IDEMPOTENCY_KEY]: idempotencyKey },
+                body: request,
               },
               isJobDetail,
               `job ${path}`,
@@ -200,6 +222,62 @@ export const jobsApi = baseApi
           invalidatesTags: (_result, _error, { id }) => [jobTag(id), LIST],
         }),
 
+        uploadJobEvidence: build.mutation<JobDetail, EvidenceUploadArgs>({
+          queryFn: (
+            { id, idempotencyKey, evidenceId, fileUri, contentType, capturedAt },
+            _api,
+            _extra,
+            send,
+          ) => {
+            const form = new FormData();
+            form.append('id', evidenceId);
+            form.append('capturedAt', capturedAt);
+            // React Native's FormData streams the file from its URI.
+            form.append('file', {
+              uri: fileUri,
+              name: `${evidenceId}.${contentType === 'image/png' ? 'png' : 'jpg'}`,
+              type: contentType,
+            } as unknown as Blob);
+            return fetchChecked(
+              send,
+              {
+                url: `${API_V1}/jobs/${id}/evidence`,
+                method: 'POST',
+                headers: { [IDEMPOTENCY_KEY]: idempotencyKey },
+                body: form,
+                timeout: UPLOAD_TIMEOUT_MS,
+              },
+              isJobDetail,
+              'evidence upload',
+            );
+          },
+          invalidatesTags: (_result, _error, { id }) => [jobTag(id), LIST],
+        }),
+
+        /**
+         * A message on a job. The sync engine sends workers' messages with a stable key;
+         * managers send theirs online (`idempotencyKey` = the message ID, so a double tap is
+         * one message).
+         */
+        sendJobMessage: build.mutation<
+          JobDetail,
+          WorkerCommandArgs & { readonly message: SendJobMessageRequest }
+        >({
+          queryFn: ({ id, idempotencyKey, message }, _api, _extra, send) =>
+            fetchChecked(
+              send,
+              {
+                url: `${API_V1}/jobs/${id}/messages`,
+                method: 'POST',
+                headers: { [IDEMPOTENCY_KEY]: idempotencyKey },
+                body: message,
+              },
+              isJobDetail,
+              'job message',
+            ),
+          invalidatesTags: (_result, _error, { id }) => [jobTag(id), LIST],
+        }),
+
         getWorkingSet: build.query<JobWorkingSet, void>({
           queryFn: (_arg, _api, _extra, send) =>
             fetchChecked(
@@ -249,4 +327,5 @@ export const {
   useAssignJobMutation,
   useCancelJobMutation,
   useListWorkersQuery,
+  useSendJobMessageMutation,
 } = jobsApi;

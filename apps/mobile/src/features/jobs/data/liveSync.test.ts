@@ -172,7 +172,9 @@ const noTimers = { set: () => 0, clear: () => undefined };
         const app = createAppStore({ services: { credentials } });
         const engine = new JobSyncEngine({
           store: new LocalJobStore({ db, me: worker.user }),
-          transport: createApiTransport(app.dispatch),
+          transport: createApiTransport(app.dispatch, {
+            exists: async () => true,
+          }),
           timers: noTimers,
         });
         return { db, store: store as LocalJobStore, engine };

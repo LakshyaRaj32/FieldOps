@@ -52,6 +52,10 @@ const job = (overrides: Partial<JobDetail> = {}): JobDetail => ({
   cancelledAt: null,
   history: [],
   fieldNotes: [],
+  startLocation: null,
+  completeLocation: null,
+  evidence: [],
+  messages: [],
   ...overrides,
 });
 

@@ -3,6 +3,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { AuthErrors } from '../common/errors/app-exception.js';
 import { APP_CONFIG, type AppConfig } from '../config/app-config.js';
+import { DomainEvents } from '../events/domain-events.js';
 import {
   SessionRevocationReason,
   type User,
@@ -36,6 +37,7 @@ export class AuthService {
     private readonly passwords: PasswordService,
     private readonly tokens: TokensService,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    private readonly events: DomainEvents,
   ) {}
 
   /** Creates a WORKER account and signs it in on the calling device. */
@@ -152,6 +154,8 @@ export class AuthService {
   async logout(sessionId: string): Promise<void> {
     await this.sessions.revoke(sessionId, SessionRevocationReason.LOGOUT);
     this.logger.log(`Session signed out (sessionId=${sessionId})`);
+    // Open WebSocket connections close and the device's push registration is removed.
+    this.events.publish({ type: 'session.ended', sessionId });
   }
 
   /**
@@ -222,6 +226,7 @@ export class AuthService {
     this.logger.warn(
       `Refresh token reuse detected; session revoked (sessionId=${sessionId})`,
     );
+    this.events.publish({ type: 'session.ended', sessionId });
   }
 }
 

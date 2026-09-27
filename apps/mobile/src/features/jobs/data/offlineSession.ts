@@ -4,7 +4,11 @@ import type { SqlDatabase } from '../../../services/db/database';
 import { migrate } from '../../../services/db/migrations';
 import { JOB_MIGRATIONS } from './localSchema';
 import { LocalJobStore } from './localJobStore';
-import { JobSyncEngine, type JobSyncTransport } from './syncEngine';
+import {
+  JobSyncEngine,
+  type EvidenceFileRemover,
+  type JobSyncTransport,
+} from './syncEngine';
 
 /** Everything offline work needs for one signed-in worker. */
 export interface OfflineSession {
@@ -33,6 +37,7 @@ export async function openOfflineSession(
   me: UserSummary,
   openDatabase: (name: string) => SqlDatabase,
   transport: JobSyncTransport,
+  files?: EvidenceFileRemover,
 ): Promise<OfflineSession> {
   await previousRelease;
   const db = openDatabase(databaseNameFor(me.id));
@@ -44,7 +49,11 @@ export async function openOfflineSession(
     throw error;
   }
   const store = new LocalJobStore({ db, me });
-  const engine = new JobSyncEngine({ store, transport });
+  const engine = new JobSyncEngine({
+    store,
+    transport,
+    ...(files !== undefined && { files }),
+  });
 
   return {
     store,

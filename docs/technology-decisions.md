@@ -38,16 +38,17 @@ for infrastructure. Build the FieldOps-specific systems ourselves.**
 | Connectivity signal | NetInfo | V1 |
 | Animations | React Native Reanimated 4 (with react-native-worklets) | V1 / V14 |
 | Mobile quality tooling | TypeScript 6.0, ESLint 9 (flat config), Prettier, Jest | V1 |
-| Native modules | Kotlin Turbo Modules | V7 |
+| Native modules | Kotlin Turbo Modules (`FieldOpsLocation`, `FieldOpsFiles`) | Phase 4 |
 | Backend framework | NestJS 12 (ESM, Express 5) | V2 |
 | Database | PostgreSQL 18 | V2 |
 | ORM / migrations | Prisma 7 (pg driver adapter) | V2 |
 | Authentication | Argon2id (`argon2`), JWT (`@nestjs/jwt`, `passport-jwt`), server-side sessions | V2 |
 | Backend validation / API docs | class-validator + class-transformer, `@nestjs/swagger` | V2 |
 | Backend tests / lint | Vitest 4 + Supertest, oxlint | V2 |
-| Realtime | WebSockets through Socket.IO and Nest gateways | V8 |
-| Push | Firebase Cloud Messaging | V9 |
-| File storage | S3-compatible object storage (MinIO locally) | V9 |
+| Realtime | WebSockets through Socket.IO 4 and Nest gateways (`@nestjs/websockets`, `@nestjs/platform-socket.io`, `socket.io-client`) | Phase 4 |
+| Push | Firebase Cloud Messaging: HTTP v1 from the API, React Native Firebase in the app | Phase 4 |
+| File storage | `ObjectStorage` interface; local disk now, S3-compatible when deployed on several instances | Phase 4 |
+| Photo capture | react-native-image-picker | Phase 4 |
 | Distributed state | Redis | V10 |
 | Queues | BullMQ | V12 |
 | Observability | Structured logs (pino), OpenTelemetry, Prometheus/Grafana | V15 |
@@ -452,6 +453,99 @@ No new dependencies were added in Phase 2. The decisions it made:
 | Sync status for the UI | React context fed by the engine | Redux slice mirror | Only the UI reads it; one fewer copy |
 | Device IDs | UUIDv7 from Math.random | `react-native-get-random-values` + `uuid` | Uniqueness is all that is needed; no native dependency. Revisit if IDs must be unguessable |
 
+## Field operations (Phase 4)
+
+Every entry: the problem, the decision, the alternatives, why, and the trade-offs.
+
+### Location: a Kotlin module on LocationManager
+
+- **Problem.** Record where a job is started and completed, and show the distance to the
+  site, without continuous tracking. React Native has no location API.
+- **Decision.** A small Kotlin Turbo Module (`FieldOpsLocation`: `isLocationEnabled`,
+  `getCurrentPosition`, `openLocationSettings`) on the platform `LocationManager`;
+  permissions through React Native's `PermissionsAndroid`.
+- **Alternatives.** `@react-native-community/geolocation` (a dependency for three calls, and
+  no way to tell "location switched off" from "no fix"); `react-native-geolocation-service`
+  and the Fused Location Provider (Google Play services dependency, better battery for
+  continuous tracking, which FieldOps does not do); Expo Location (Expo modules runtime).
+- **Why.** No new dependency, exact error codes for actionable messages, and the Kotlin
+  boundary the architecture planned for location. One fix at a time needs nothing more.
+- **Trade-offs.** Native code to maintain and test on a device (no JS-only tests of it). If
+  background tracking is ever required, the Fused Location Provider in a foreground service
+  becomes the right tool, and this module grows or is replaced.
+
+### Evidence files: a Kotlin module for app-private copies
+
+- **Problem.** The image picker writes into the cache directory, which Android may clear;
+  photos captured offline must survive until uploaded.
+- **Decision.** `FieldOpsFiles` (`importFile`, `fileExists`, `deleteFile`), confined to
+  `files/evidence`.
+- **Alternatives.** `react-native-fs` / `@dr.pogodin/react-native-fs`, `react-native-blob-util`
+  (general file-system libraries with far more surface than three functions).
+- **Trade-offs.** More native code; kept tiny and confined.
+
+### Photo capture: react-native-image-picker
+
+- **Problem.** Take a photo or choose one, resized, without handling camera intents,
+  FileProviders and the Android photo picker ourselves.
+- **Decision.** `react-native-image-picker` (camera through the system camera app, gallery
+  through Android's photo picker, native resizing to 1920 px / JPEG quality 0.8).
+- **Alternatives.** `react-native-vision-camera` (an in-app camera: large, needs the CAMERA
+  permission, more than a field photo needs); `expo-image-picker` (Expo modules runtime);
+  writing the intents in Kotlin (reinventing a solved problem).
+- **Why.** One maintained library covers both sources, supports the New Architecture, and
+  needs **no CAMERA permission** when the app does not declare it.
+- **Trade-offs.** EXIF handling differs between devices, so the server strips metadata anyway.
+
+### Realtime: Socket.IO through NestJS gateways (confirmed)
+
+The V0 decision (see [WebSockets](#websockets-socketio-through-nestjs-gateways)) was kept:
+rooms, a maintained NestJS adapter, bounded reconnection with jitter built into the client,
+and a Redis adapter for Phase 5. WebSocket transport only. The raw `ws` library with React
+Native's built-in WebSocket would have avoided the client dependency, at the cost of writing
+rooms and reconnection by hand. Trade-off: the Socket.IO protocol on top of WebSockets (a
+client must speak it), and `socket.io-client` in the app bundle.
+
+### Push notifications: FCM (Phase 4)
+
+- **Problem.** Reach a worker or manager whose app is in the background or closed.
+- **Decision.** FCM. Server: the **FCM HTTP v1 API called directly**, authenticated with a
+  service-account JWT assertion signed by `@nestjs/jwt` (already a dependency). App:
+  `@react-native-firebase/app` + `@react-native-firebase/messaging`.
+- **Alternatives (server).** `firebase-admin` (the official SDK; pulls in Google Cloud client
+  libraries for one HTTP call). **(App)** Notifee (display control in the foreground; not
+  needed: Android displays notification messages, and foreground updates come through
+  realtime), Expo Notifications (Expo runtime), OneSignal and similar (third-party service).
+- **Why.** FCM is the Android push channel; the direct API keeps the server dependency-free.
+- **Trade-offs.** The OAuth token flow is our code (small and tested). React Native Firebase
+  requires a per-developer `google-services.json`; builds without it skip push. Delivery is not
+  guaranteed, which the design accepts (inbox + sync).
+
+### Object storage: an interface with a local-disk implementation
+
+- **Problem.** Store photo bytes outside PostgreSQL.
+- **Decision.** `ObjectStorage` (`put`, `get`, `delete`) with `LocalDiskObjectStorage`
+  under `STORAGE_DIR`; uploads go through the API (multipart, multer from
+  `@nestjs/platform-express`, already installed).
+- **Alternatives.** MinIO in Docker with presigned URLs (the V0 plan): another container on
+  an 8 GB development machine, and presigned direct uploads would bypass the server-side
+  byte inspection and metadata stripping. A managed store (S3, R2) now: needs an account and
+  network in development.
+- **Why.** Zero infrastructure now, same interface later.
+- **Trade-offs.** Single instance only (files on one disk); the API process carries the
+  upload bytes (fine for ≤10 MB photos). The S3-compatible implementation arrives with
+  multi-instance deployment.
+
+### In-process domain events
+
+- **Problem.** Jobs must trigger realtime and notifications without depending on them.
+- **Decision.** A tiny typed event bus (`src/events/domain-events.ts`) published after commit.
+- **Alternatives.** `@nestjs/event-emitter` (a dependency for a 60-line class); calling the
+  modules directly (couples jobs to delivery); a transactional outbox with BullMQ now
+  (Phase 5 scope, needs Redis).
+- **Trade-offs.** Not durable: a crash after commit loses that hint. Acceptable because every
+  consumer is best effort by design; Phase 5 makes it durable.
+
 ## Pending decisions
 
 These are deliberately deferred to the version where the information to decide exists.
@@ -482,3 +576,4 @@ These are deliberately deferred to the version where the information to decide e
 | Roadmap structure | Phase 2 | Six phases ([master-development-plan.md](master-development-plan.md)); the V0–V19 list remains the internal breakdown ([phase-status.md](phase-status.md)) |
 | Mobile SQLite library | Phase 3 | react-native-nitro-sqlite (see [SQLite (mobile)](#sqlite-mobile)) |
 | Shared runtime package | Phase 3 | `@fieldops/shared` with the job state machine; source for bundlers, `dist/` for the API |
+| Location, photo capture, push, object storage, realtime | Phase 4 | See [Field operations (Phase 4)](#field-operations-phase-4) |

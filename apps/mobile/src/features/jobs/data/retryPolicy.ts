@@ -37,7 +37,17 @@ const CONFLICT_CODES: readonly string[] = [
   'FORBIDDEN',
 ];
 
+/**
+ * Set by the transport when a photo's file is no longer on the phone: no retry can help, so
+ * the upload fails for good and the worker is told (instead of retrying forever as if
+ * offline).
+ */
+export const LOCAL_FILE_MISSING = 'LOCAL_FILE_MISSING';
+
 export function classifyFailure(error: AppError): FailureKind {
+  if (error.code === LOCAL_FILE_MISSING) {
+    return 'rejected';
+  }
   switch (error.kind) {
     case 'network':
     case 'timeout':

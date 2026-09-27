@@ -18,7 +18,11 @@
 | Worker: see what is unsynced and what was rejected | ✅ | Global banner, per-job badges, Profile › Offline sync |
 | Receive new assignments | ❌ | Arrive with the next sync (foreground, reconnect, pull to refresh) |
 | Managers and admins (create, assign, edit, cancel, monitor) | ❌ | Online by design; manager screens use RTK Query |
-| Photos, signatures, location, messages | ❌ | Phase 4 |
+| Worker: record where a job was started/completed (Phase 4) | ✅ | The fix is part of the start/complete outbox entry |
+| Worker: take or choose photos (Phase 4) | ✅ | File copied to app-private storage; upload is an outbox entry |
+| Worker: write job messages (Phase 4) | ✅ | Outbox entry `job.message.send`; shown at once as "waiting to send" |
+| Receive messages, assignments while open (Phase 4) | ❌ offline / ✅ online | Realtime hint → sync; push when in the background |
+| Signatures, documents | ❌ | Not built yet |
 
 ### Write path (as implemented)
 
@@ -50,6 +54,18 @@ for local writes, and nothing is lost if the app is killed straight after.
 - The two copies per job make convergence explicit: `server_json` is replaced by what the
   server sends (the server is the source of truth), `local_json` is always recomputed as the
   server copy plus the still-pending commands. SQLite never becomes an independent authority.
+
+### Phase 4 additions
+
+- **Schema v2** rebuilds the outbox with the new command types (rows copied unchanged; SQLite
+  cannot alter a CHECK constraint) and adds `evidence_files`. Jobs stored by v1 are completed
+  with the Phase 4 fields when read, so an upgraded phone with pending work keeps working
+  (tested in `localSchema.test.ts`).
+- **Binary data stays out of SQLite.** A photo's bytes are a file in `files/evidence`; the
+  outbox payload holds its URI. Files are deleted once their upload is settled and no longer
+  shown ([evidence.md](evidence.md#on-the-device)).
+- **Location** is captured only at explicit actions and stored inside the command it belongs
+  to; there is no location table on the device ([location.md](location.md)).
 
 ### Local database lifecycle
 

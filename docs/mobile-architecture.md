@@ -6,7 +6,12 @@
 > [authentication.md](authentication.md#8-mobile-app); Phase 2: the jobs feature, see
 > [Jobs (Phase 2)](#jobs-phase-2); Phase 3: SQLite, the outbox and the sync engine for the
 > worker's jobs, see [6. SQLite access layer](#6-sqlite-access-layer-phase-3)). Later layers arrive in V5 (SQLite), V6 (sync), V7 (Kotlin location), V8 (realtime), V9 (push and media) and V14
-> (performance). How to run and develop the app: [mobile-development.md](mobile-development.md).
+> (performance). **Phase 4 (code written, awaiting verification):** Kotlin modules
+> `FieldOpsLocation` and `FieldOpsFiles`, `services/location`, `services/files`,
+> `services/media`, `services/realtime`, `services/push`, the notifications feature, and
+> local schema v2; see [9. Native modules](#9-native-modules-kotlin-v7) and
+> [Field operations (Phase 4)](#field-operations-phase-4). How to run and develop the app:
+> [mobile-development.md](mobile-development.md).
 
 ## 1. Goals
 
@@ -283,7 +288,43 @@ jobs/
   attention"), `SyncProblemList` (reason, Dismiss, Try again) and `SyncCard` on Profile with
   "Sync now".
 
+## Field operations (Phase 4)
+
+```text
+services/native/        codegen specs: NativeFieldOpsLocation.ts, NativeFieldOpsFiles.ts
+services/location/      permission + one fix → LocationResult (locationService, locationResult)
+services/files/         evidence files in app-private storage (FieldOpsFiles)
+services/media/         photo capture/choice (react-native-image-picker; sole importer)
+services/realtime/      RealtimeClient (socket.io-client; sole importer), envelope checks
+services/push/          FCM (React Native Firebase; sole importer)
+features/jobs/          outbox commands job.evidence.add, job.message.send; locations on
+                        start/complete; FieldOperationSections, WorkerLocationPanel,
+                        MessageComposer; schema v2 (evidence_files)
+features/notifications/ inbox API + screen, notificationRouting (push data → route)
+app/providers/          RealtimeConnection (resync on events/reconnect), PushNotifications
+app/navigation/         navigationRef (open a job from a notification, also on cold start)
+hooks/useLiveUpdates    realtime and push status for display
+```
+
+All new worker writes follow the Phase 3 write path (one SQLite transaction: outbox entry +
+local view); realtime and push only trigger the existing sync. See [location.md](location.md),
+[realtime.md](realtime.md), [notifications.md](notifications.md), [evidence.md](evidence.md).
+
 ## 9. Native modules (Kotlin, V7+)
+
+**As built in Phase 4** (both Turbo Modules from specs in `src/services/native`, registered by
+`FieldOpsPackage.kt`; `codegenConfig` in `package.json`):
+
+| Module | Responsibility |
+| --- | --- |
+| `FieldOpsLocation` | Location enabled?, one foreground fix (LocationManager), open location settings |
+| `FieldOpsFiles` | Copy a picked photo into `files/evidence`, check, delete (confined to that directory) |
+
+`MainApplication.kt` also creates the `jobs` notification channel. The planned modules
+below (`LocationTracking`, `BackgroundSync`) are not built: no workflow needs background
+tracking yet, and background sync (WorkManager) remains later work.
+
+The original plan:
 
 | Module | Responsibility | Android APIs |
 | --- | --- | --- |

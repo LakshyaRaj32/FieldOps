@@ -1,12 +1,15 @@
 import { decideTransition, type JobTransition } from '@fieldops/shared';
 import type {
   AddJobNoteRequest,
+  JobCommandRequest,
   JobDetail,
   JobWorkingSet,
+  SendJobMessageRequest,
   UserSummary,
 } from '@fieldops/types';
 
 import type {
+  EvidenceUpload,
   JobSyncTransport,
   TransportResult,
 } from '../features/jobs/data/syncEngine';
@@ -48,6 +51,10 @@ export function serverJob(overrides: Partial<JobDetail> = {}): JobDetail {
     cancelledAt: null,
     history: [],
     fieldNotes: [],
+    startLocation: null,
+    completeLocation: null,
+    evidence: [],
+    messages: [],
     ...overrides,
   };
 }
@@ -71,6 +78,8 @@ interface Call {
   readonly operation: string;
   readonly jobId: string;
   readonly mutationId: string;
+  /** Start/complete bodies, uploads and messages, as sent. */
+  readonly body?: unknown;
 }
 
 /**
@@ -119,12 +128,79 @@ export class FakeJobServer implements JobSyncTransport {
 
   // ---- Transport -----------------------------------------------------------------------
 
-  startJob(jobId: string, mutationId: string) {
-    return this.transition('start', jobId, mutationId);
+  startJob(jobId: string, mutationId: string, request: JobCommandRequest) {
+    return this.transition('start', jobId, mutationId, request);
   }
 
-  completeJob(jobId: string, mutationId: string) {
-    return this.transition('complete', jobId, mutationId);
+  completeJob(jobId: string, mutationId: string, request: JobCommandRequest) {
+    return this.transition('complete', jobId, mutationId, request);
+  }
+
+  async uploadEvidence(
+    jobId: string,
+    mutationId: string,
+    upload: EvidenceUpload,
+  ): Promise<TransportResult<JobDetail>> {
+    return this.command(
+      'job.evidence.add',
+      jobId,
+      mutationId,
+      job => {
+        if (job.evidence.some(existing => existing.id === upload.id)) {
+          return job;
+        }
+        this.effects += 1;
+        return {
+          ...job,
+          evidence: [
+            ...job.evidence,
+            {
+              id: upload.id,
+              contentType: upload.contentType,
+              sizeBytes: 1000,
+              width: 640,
+              height: 480,
+              uploadedBy: WORKER,
+              capturedAt: upload.capturedAt,
+              createdAt: this.tick(),
+            },
+          ],
+        };
+      },
+      upload,
+    );
+  }
+
+  async sendMessage(
+    jobId: string,
+    mutationId: string,
+    message: SendJobMessageRequest,
+  ): Promise<TransportResult<JobDetail>> {
+    return this.command(
+      'job.message.send',
+      jobId,
+      mutationId,
+      job => {
+        if (job.messages.some(existing => existing.id === message.id)) {
+          return job;
+        }
+        this.effects += 1;
+        return {
+          ...job,
+          messages: [
+            ...job.messages,
+            {
+              id: message.id,
+              body: message.body,
+              author: WORKER,
+              occurredAt: message.occurredAt,
+              createdAt: this.tick(),
+            },
+          ],
+        };
+      },
+      message,
+    );
   }
 
   async addNote(
@@ -178,8 +254,13 @@ export class FakeJobServer implements JobSyncTransport {
     transition: JobTransition,
     jobId: string,
     mutationId: string,
+    request: JobCommandRequest = {},
   ): Promise<TransportResult<JobDetail>> {
-    return this.command(`job.${transition}`, jobId, mutationId, job => {
+    const recorded =
+      request.location === undefined
+        ? null
+        : { ...request.location, distanceMeters: null };
+    const apply = (job: JobDetail): JobDetail => {
       const decision = decideTransition(job.status, transition);
       if (decision.kind === 'rejected') {
         throw httpError(409, 'INVALID_STATUS_TRANSITION');
@@ -192,10 +273,17 @@ export class FakeJobServer implements JobSyncTransport {
         ...job,
         status: decision.to,
         version: job.version + 1,
-        ...(transition === 'start' && { startedAt: this.tick() }),
-        ...(transition === 'complete' && { completedAt: this.tick() }),
+        ...(transition === 'start' && {
+          startedAt: this.tick(),
+          startLocation: recorded,
+        }),
+        ...(transition === 'complete' && {
+          completedAt: this.tick(),
+          completeLocation: recorded,
+        }),
       };
-    });
+    };
+    return this.command(`job.${transition}`, jobId, mutationId, apply, request);
   }
 
   private async command(
@@ -203,8 +291,14 @@ export class FakeJobServer implements JobSyncTransport {
     jobId: string,
     mutationId: string,
     apply: (job: JobDetail) => JobDetail,
+    body?: unknown,
   ): Promise<TransportResult<JobDetail>> {
-    this.calls.push({ operation, jobId, mutationId });
+    this.calls.push({
+      operation,
+      jobId,
+      mutationId,
+      ...(body !== undefined && { body }),
+    });
     if (!this.online) {
       return { error: networkError };
     }

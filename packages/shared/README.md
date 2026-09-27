@@ -31,9 +31,10 @@ Pure, framework-free TypeScript that both `apps/mobile` and `apps/api` need at r
 | --- | --- | --- |
 | API contract schemas (runtime validation of request/response payloads) | V6 (sync), if needed | Client and server validate the same shapes. V2 shares contract *types* through `@fieldops/types` instead |
 | Job status state machine (allowed transitions) | **Phase 3 (here)** | The mobile app validates transitions offline; the server enforces them |
+| Distance between coordinates (`@fieldops/shared/geo`) | **Phase 4 (here)** | The server computes the authoritative distance from the job site; the phone shows the same estimate before sync |
 | Sync protocol envelopes and mutation type definitions | V6 | Both sides must agree on the sync protocol exactly |
 | Retry/backoff calculation | V6 | Same policy for mobile sync and server-side workers |
-| Realtime event names and payload schemas | V8 | WebSocket contract between gateway and client |
+| Realtime event names and payload schemas | Phase 4 | Delivered as *types* in `@fieldops/types` (`realtime.ts`): the payloads are hints (IDs and a status), each side validates what it reads, so no shared runtime schema was needed |
 
 ## Rules
 

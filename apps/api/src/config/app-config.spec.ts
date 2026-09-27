@@ -36,6 +36,22 @@ describe('parseAppConfig', () => {
     });
   });
 
+  it('defaults evidence storage to ./storage and leaves push disabled', () => {
+    const config = parseAppConfig(VALID);
+    expect(config.storageDir).toBe('./storage');
+    expect(config.fcmServiceAccountFile).toBeUndefined();
+  });
+
+  it('reads the FCM service-account path and refuses a non-JSON file', () => {
+    expect(
+      parseAppConfig({ ...VALID, FCM_SERVICE_ACCOUNT_FILE: './fcm.json' })
+        .fcmServiceAccountFile,
+    ).toBe('./fcm.json');
+    expect(errorOf({ ...VALID, FCM_SERVICE_ACCOUNT_FILE: './fcm.pem' })).toContain(
+      'FCM_SERVICE_ACCOUNT_FILE',
+    );
+  });
+
   it('uses the PORT supplied by the platform', () => {
     expect(parseAppConfig({ ...VALID, PORT: '10000' }).port).toBe(10_000);
   });

@@ -4,10 +4,10 @@ The project is managed in six phases ([master-development-plan.md](master-develo
 This file records where the project stands. Update it at every phase checkpoint.
 
 ```text
-Current Phase:   Phase 3 — Offline-First
-Phase Status:    IMPLEMENTED — awaiting physical-device verification (BLOCKED: no device)
+Current Phase:   Phase 4 — Field Operations
+Phase Status:    CODE WRITTEN — not yet installed, built, tested or run (BLOCKED, see below)
 Completed Phase: Phase 1 — Foundation
-Next Phase:      Phase 4 — Field Operations
+Next Phase:      Phase 5 — Production Engineering (not started)
 ```
 
 Phases 2 and 3 are implemented and verified by automated tests, including an end-to-end run of
@@ -15,6 +15,12 @@ the app's offline data layer against the real API and PostgreSQL. **Neither has 
 physical Android phone yet**: no device was connected (`adb devices` empty) during either
 implementation session. Both device checklists can be done in one sitting:
 [Phase 2](#verification-still-required) first, then [Phase 3](#phase-3-device-verification).
+
+**Phase 4 code is written but unverified.** In the Phase 4 session the repository owner asked
+that no machine resources (installs, builds, test runs) be used without permission, so the new
+dependencies are declared but not installed, and no test, type check, lint, migration, build
+or device run has been done. See [Phase 4](#phase-4--field-operations) for exactly what
+remains.
 
 When they pass, set:
 
@@ -34,7 +40,7 @@ and create the tags `phase-2-core-product` and `phase-3-offline-first`.
 | 1 — Foundation | V0, V1, V2 | Complete (see [roadmap.md](roadmap.md) for the V0–V2 checklists) |
 | 2 — Core Product | Jobs (the former V4 job model and screens) | Implemented, device verification pending |
 | 3 — Offline-First | Local SQLite, sync engine, conflict resolution (see the note below) | Implemented, device verification pending |
-| 4 — Field Operations | V7, V8, V9 | Not started |
+| 4 — Field Operations | V7, V8, V9 | Code written; not installed, tested, built or device-verified |
 | 5 — Production Engineering | V10, V11, V12, V13, V15, V18 | Not started |
 | 6 — Showcase Release | V14, V16, V17, V19 | Not started |
 
@@ -290,3 +296,166 @@ Also check that `adb logcat` shows no SQLite errors at start-up.
   sets.
 - Only worker job commands work offline; manager screens need a connection, by design.
 - Checklist completion, photos, signatures, location and messages are not implemented (Phase 4).
+
+---
+
+## Phase 4 — Field Operations
+
+Former V7 (location), V8 (messaging, WebSockets) and V9 (notifications, files, evidence) as one
+phase, integrated into the Phase 3 offline architecture: every new worker action is an outbox
+command, and realtime and push are hints that trigger the existing sync.
+
+### What was implemented
+
+**Location** ([location.md](location.md))
+
+- A small Kotlin Turbo Module `FieldOpsLocation` on Android's `LocationManager` (no Play
+  services, no npm dependency): one foreground fix on demand, "is location on?", open settings.
+- Permissions asked in context with `PermissionsAndroid` (fine + coarse; no background
+  location); every failure case explained with its way out.
+- A fix is captured at **Start job** and **Complete job** (never blocking them) and travels in
+  the outbox payload; the server stores it on the STARTED/COMPLETED history entry and computes
+  the distance from the job site itself. "Check my distance" shows a fix without storing it.
+
+**Realtime** ([realtime.md](realtime.md))
+
+- Socket.IO gateway at `/realtime` (WebSocket only), authenticated with the same access-token
+  and session checks as REST (`AccessTokenVerifier`, extracted from the Passport strategy).
+- Rooms from the job policy: managers + the assigned worker; an `unassigned` hint for a worker
+  a job was taken from. Connections close at token expiry and at sign-out.
+- Events `job.changed` and `job.message.created` (IDs and status only, versioned envelope).
+- App: `RealtimeClient` with bounded backoff (1–30 s), one token refresh on expiry, paused in
+  the background and offline; every event and every (re)connection triggers the Phase 3 sync
+  (workers) and a refetch (online screens).
+
+**Messages**
+
+- Job-scoped conversation between the assigned worker and managers (`job_messages`,
+  device-generated IDs, idempotent). Workers send through the outbox (`job.message.send`,
+  works offline); managers send online. The latest 100 messages are part of `JobDetail` and
+  therefore of the worker's working set: no separate message sync.
+
+**Notifications** ([notifications.md](notifications.md))
+
+- Inbox (`notifications` table, list/read/read-all API, Notifications tab with unread badge).
+- Rules: assignment, unassignment, cancellation, completion (to the creator), messages; never
+  to the actor.
+- FCM HTTP v1 sender (OAuth assertion signed with the existing `@nestjs/jwt`), push payloads
+  with IDs only; disabled cleanly without a service-account file.
+- Device tokens bound to sessions (`push_devices`): rotation, move between sessions, removal on
+  sign-out, on FCM "unregistered", and never sent to revoked sessions.
+- App: React Native Firebase messaging, permission on Android 13+, taps open the job from the
+  background and from a cold start, "Looking for this job…" + sync when it is not on the phone.
+  Android channel `jobs` created natively. Push is optional per build (no
+  `google-services.json` → "Not available in this build").
+
+**Evidence** ([evidence.md](evidence.md))
+
+- Photos (JPEG/PNG) taken or chosen with `react-native-image-picker` (resized to 1920 px),
+  copied to app-private storage by a small Kotlin module `FieldOpsFiles`, and uploaded through
+  the outbox (`job.evidence.add`, multipart, exactly once).
+- Server: type detected from the bytes, structure and dimensions checked, EXIF/GPS and other
+  metadata stripped (orientation kept), 10 MB and 50-per-job limits, stored through an
+  `ObjectStorage` interface (local disk implementation), metadata in `job_evidence`,
+  authorized download.
+- Gallery with states Waiting to upload / Uploading / Uploaded / Upload failed; local files
+  deleted once nothing needs them.
+
+**Backend structure**
+
+- In-process domain events (`src/events`): jobs publish `job.changed` / `job.message.created`
+  after commit, auth publishes `session.ended`; realtime and notifications subscribe.
+- Migration `20260927100000_field_operations` (hand-written in Prisma's format): location
+  columns on `job_events` with a CHECK constraint; `job_evidence`, `job_messages`,
+  `push_devices`, `notifications`.
+- New error codes `UNSUPPORTED_FILE_TYPE`, `EVIDENCE_LIMIT_REACHED`; new config
+  `STORAGE_DIR`, `FCM_SERVICE_ACCOUNT_FILE`.
+
+**App data layer**
+
+- Local schema v2: the outbox rebuilt with the two new command types (rows copied unchanged),
+  `evidence_files`; jobs stored by v1 are completed with the new fields when read.
+- `JobDetail` gains `startLocation`, `completeLocation`, `evidence`, `messages` (validated at
+  runtime); workers' `allowedActions` gain `evidence` and `message`, managers' gain `message`.
+
+### Important decisions
+
+| Decision | Why |
+| --- | --- |
+| On-demand foreground location, no tracking | No workflow needs continuous tracking; it would cost battery and privacy for nothing |
+| Kotlin module instead of a geolocation library | Three platform calls, exact failure codes ("location off" vs "no fix"), no Play services, no dependency |
+| Location recorded, never enforced | Fixes can be inaccurate or spoofed; enforcing would block honest workers. The server computes the distance itself |
+| Evidence through the outbox | Same guarantees as every other command (durable, ordered, idempotent, visible failures); only the transport is multipart |
+| Messages inside `JobDetail` / the working set | Reuses sync; no second synchronization system |
+| Local-disk object storage behind an interface | No MinIO container on an 8 GB machine; one implementation, swappable for S3 |
+| Upload through the API, not presigned URLs | The server must inspect and rewrite the bytes (type, metadata) anyway; photos are small |
+| FCM HTTP v1 without the Admin SDK | One HTTP call, signed with the JWT library already in use |
+| Device token per session | A session is a signed-in device: sign-out and revocation end push automatically |
+| In-process domain events | Decouples jobs from realtime/notifications now; Phase 5 swaps in outbox + BullMQ |
+
+### Testing status
+
+**Nothing in this phase has been run.** Tests written:
+
+| Suite | New or changed |
+| --- | --- |
+| Shared (`npm test -w @fieldops/shared`) | `geo.spec.ts` |
+| API unit (`npm test -w @fieldops/api`) | `evidence-image`, `job-location`, `domain-events`, `local-disk-object-storage`, `realtime-audience`, `notification-plan`, `fcm-push-sender`, `app-config`, `job.policy` (updated) |
+| API E2E (`npm run api:test:e2e`) | `field-operations.e2e-spec.ts` (location, evidence, messages, notifications, push devices), `realtime.e2e-spec.ts` (real Socket.IO client); `jobs` and `offline-sync` updated for the new `allowedActions` |
+| Mobile (`npm test -w @fieldops/mobile`) | `localSchema.test.ts` (v1 → v2 with pending work), `syncEngine.test.ts` (location, uploads, messages, file cleanup), `projection`, `contracts`, `locationResult`, `photoPicker`, `realtimeClient`, `notificationRouting`, `notificationsApi`, `presentation`, `retryPolicy` |
+
+### Steps to verify (in order, each needs the owner's go-ahead)
+
+1. `npm install` at the root (adds `@nestjs/websockets`, `@nestjs/platform-socket.io`,
+   `socket.io`, `socket.io-client`, `react-native-image-picker`,
+   `@react-native-firebase/app`, `@react-native-firebase/messaging`). The versions in the
+   manifests are the expected current majors; adjust if npm reports one missing.
+2. `npm run typecheck`, `npm run lint`, then `npm run format -w @fieldops/api` and
+   `npm run format -w @fieldops/mobile` (the new files were not run through Prettier).
+3. `npm test`, then `npm run db:deploy` and `npm run api:test:e2e` (PostgreSQL running).
+4. Android build (`--no-daemon -Dorg.gradle.workers.max=2`, one ABI; codegen generates the
+   `FieldOpsSpecs` Java specs the Kotlin modules extend). Without `google-services.json` the
+   build skips the Google services plugin; confirm the app starts with push "Not available".
+5. Optional push: Firebase project, `google-services.json`, `FCM_SERVICE_ACCOUNT_FILE`
+   ([notifications.md](notifications.md#setup-push)).
+6. The [device checklist](#phase-4-device-verification).
+
+### Phase 4 device verification
+
+Not done (no device; nothing built). With the API on the computer, `npm run mobile:reverse`,
+one manager and one worker account (two phones, or the manager in Swagger):
+
+1. Manager assigns a job with coordinates → worker's phone: realtime refresh while open; push
+   while in the background and while closed; tap opens the job.
+2. Worker opens the job → Job site card → **Check my distance** → permission prompt → distance.
+   Try deny, "don't ask again", location switched off: each explained.
+3. **Start job** → "Getting your position…" → started; manager sees "Started … from the site".
+4. Worker and manager exchange a message; each side updates live.
+5. Airplane mode. Worker: take a photo, choose a photo, write a message, **Complete job**
+   (position captured or explained). Everything shows "Waiting…".
+6. Force close, reopen offline: all still pending.
+7. Network back: sync uploads photos and sends commands exactly once; realtime reconnects;
+   manager gets the completion notification; both sides show the same final state.
+8. `adb logcat` shows no errors from `FieldOpsLocation`, `FieldOpsFiles` or SQLite migration 2
+   (upgrade from a Phase 3 install with pending work, if one exists).
+
+When everything passes: set this phase COMPLETE, commit, tag `phase-4-field-operations`.
+
+### Known issues and limitations
+
+- **Not installed, compiled, tested or run** (see above). Hand-written parts most likely to
+  need a fix on the first run: the migration SQL (must match Prisma's schema diff), the Kotlin
+  modules against the generated specs, React Native Firebase with no Firebase configuration,
+  and dependency versions.
+- React Native Firebase is expected to stay inert without `google-services.json`; if its
+  native side fails at start-up without one, a dummy Firebase project is the workaround.
+- Push has no retry before Phase 5 (BullMQ); the inbox and sync cover a lost push.
+- Domain events are in-process: a crash between commit and delivery loses that hint only.
+- A crash between storing an evidence object and recording it leaves an orphan file (cleanup
+  job in Phase 5).
+- Socket.IO fan-out is single-instance (Redis adapter in Phase 5).
+- Revoking a session from elsewhere closes its WebSockets within one access-token lifetime,
+  not instantly (sign-out on the device itself is instant).
+- Documents and signatures are not implemented (photos only); no notification preferences;
+  no read receipts or typing indicators (out of scope by design).
+- The Phase 2 and Phase 3 device checklists are still open as well.

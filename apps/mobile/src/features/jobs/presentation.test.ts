@@ -7,9 +7,11 @@ import {
 
 import type { OutboxEntry } from './data/types';
 import {
+  describeActionLocation,
   describeHistoryEntry,
   describeProblem,
   describeSync,
+  formatDistance,
   formatSchedule,
   formatTime,
   jobCommands,
@@ -150,7 +152,9 @@ describe('describeHistoryEntry', () => {
 });
 
 describe('describeProblem', () => {
-  const problem = (overrides: Partial<OutboxEntry>): OutboxEntry => ({
+  // Cast: the fixture mixes command types and payloads freely; only labels are under test.
+  const problem = (overrides: Partial<OutboxEntry>): OutboxEntry =>
+    ({
     seq: 1,
     mutationId: 'm-1',
     type: 'job.start',
@@ -166,7 +170,7 @@ describe('describeProblem', () => {
     lastError: { code: 'INVALID_STATUS_TRANSITION', message: 'x' },
     createdAt: '2026-09-27T09:00:00.000Z',
     ...overrides,
-  });
+  }) as OutboxEntry;
 
   it('explains a state conflict and a lost assignment differently', () => {
     expect(describeProblem(problem({}))).toBe(
@@ -231,5 +235,37 @@ describe('describeSync', () => {
       message: '1 change needs attention (Profile › Sync).',
       tone: 'danger',
     });
+  });
+});
+
+describe('field operations presentation', () => {
+  it('formats distances in meters, then kilometers', () => {
+    expect(formatDistance(35.4)).toBe('35 m');
+    expect(formatDistance(1234)).toBe('1.2 km');
+    expect(formatDistance(18_400)).toBe('18 km');
+  });
+
+  it('describes where a job was started, with the fix accuracy', () => {
+    const location = {
+      latitude: 28.6149,
+      longitude: 77.209,
+      accuracyMeters: 15,
+      capturedAt: '2026-09-27T09:00:00.000Z',
+    };
+    expect(describeActionLocation({ ...location, distanceMeters: 120 })).toBe(
+      '120 m from the site (±15 m)',
+    );
+    expect(describeActionLocation({ ...location, distanceMeters: null })).toBe(
+      '28.61490, 77.20900 (±15 m)',
+    );
+  });
+
+  it('never turns photos or messages into command buttons', () => {
+    expect(
+      jobCommands({
+        allowedActions: [JobAction.EVIDENCE, JobAction.MESSAGE, JobAction.NOTE],
+        assignedWorker: null,
+      }),
+    ).toEqual([]);
   });
 });

@@ -1,7 +1,12 @@
 import { nextStatus } from '@fieldops/shared';
+import { distanceMeters } from '@fieldops/shared/geo';
 import {
   JobAction,
+  type ActionLocation,
+  type DeviceLocation,
   type JobDetail,
+  type JobEvidence,
+  type JobMessage,
   type JobNote,
   type JobStatus,
   type UserSummary,
@@ -26,7 +31,11 @@ export function projectJob(
   let status: JobStatus = server.status;
   let startedAt = server.startedAt;
   let completedAt = server.completedAt;
+  let startLocation = server.startLocation;
+  let completeLocation = server.completeLocation;
   const notes: JobNote[] = [...server.fieldNotes];
+  const evidence: JobEvidence[] = [...server.evidence];
+  const messages: JobMessage[] = [...server.messages];
 
   for (const entry of pending) {
     switch (entry.type) {
@@ -35,6 +44,7 @@ export function projectJob(
         if (to !== undefined) {
           status = to;
           startedAt = entry.occurredAt;
+          startLocation = estimate(server, entry.payload?.location ?? null);
         }
         break;
       }
@@ -43,17 +53,16 @@ export function projectJob(
         if (to !== undefined) {
           status = to;
           completedAt = entry.occurredAt;
+          completeLocation = estimate(server, entry.payload?.location ?? null);
         }
         break;
       }
-      case 'job.note.add':
-        if (
-          entry.payload !== null &&
-          !notes.some(note => note.id === entry.payload?.noteId)
-        ) {
+      case 'job.note.add': {
+        const { noteId, body } = entry.payload;
+        if (!notes.some(note => note.id === noteId)) {
           notes.push({
-            id: entry.payload.noteId,
-            body: entry.payload.body,
+            id: noteId,
+            body,
             author: me,
             occurredAt: entry.occurredAt,
             // Not received yet: shown at the device time until the server confirms.
@@ -61,6 +70,36 @@ export function projectJob(
           });
         }
         break;
+      }
+      case 'job.evidence.add': {
+        const photo = entry.payload;
+        if (!evidence.some(item => item.id === photo.evidenceId)) {
+          evidence.push({
+            id: photo.evidenceId,
+            contentType: photo.contentType,
+            sizeBytes: photo.sizeBytes,
+            width: photo.width,
+            height: photo.height,
+            uploadedBy: me,
+            capturedAt: entry.occurredAt,
+            createdAt: entry.occurredAt,
+          });
+        }
+        break;
+      }
+      case 'job.message.send': {
+        const { messageId, body } = entry.payload;
+        if (!messages.some(message => message.id === messageId)) {
+          messages.push({
+            id: messageId,
+            body,
+            author: me,
+            occurredAt: entry.occurredAt,
+            createdAt: entry.occurredAt,
+          });
+        }
+        break;
+      }
     }
   }
 
@@ -69,8 +108,32 @@ export function projectJob(
     status,
     startedAt,
     completedAt,
+    startLocation,
+    completeLocation,
     fieldNotes: notes,
+    evidence,
+    messages,
     allowedActions: workerActions(status),
+  };
+}
+
+/**
+ * A pending command's location, with the phone's own distance estimate (the same formula
+ * the server uses; the server's value replaces it after sync).
+ */
+function estimate(
+  job: JobDetail,
+  location: DeviceLocation | null,
+): ActionLocation | null {
+  if (location === null) {
+    return null;
+  }
+  return {
+    ...location,
+    distanceMeters:
+      job.location === null
+        ? null
+        : Math.round(distanceMeters(job.location, location)),
   };
 }
 
@@ -86,5 +149,7 @@ export function workerActions(status: JobStatus): JobAction[] {
       ? [JobAction.COMPLETE]
       : []),
     JobAction.NOTE,
+    JobAction.EVIDENCE,
+    JobAction.MESSAGE,
   ];
 }

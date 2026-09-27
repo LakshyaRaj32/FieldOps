@@ -3,6 +3,17 @@ apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
 /**
+ * Push notifications (FCM) need the Firebase project's app/google-services.json, which is
+ * per-developer and gitignored (docs/notifications.md, "Setup"). Without it the app still
+ * builds and runs: push is simply unavailable, and the app says so on the Profile tab.
+ */
+if (file("google-services.json").exists()) {
+    apply plugin: "com.google.gms.google-services"
+} else {
+    logger.warn("FieldOps: app/google-services.json not found; building without push notifications.")
+}
+
+/**
  * Resolves an npm package directory with Node's module resolution. Required because the
  * npm-workspaces monorepo hoists packages to the repository root (see settings.gradle).
  */

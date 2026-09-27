@@ -1,6 +1,8 @@
 # Backend Architecture
 
-> Status: **implemented through Phase 3 (Offline-First).** The NestJS application exists in
+> Status: **implemented through Phase 3 (Offline-First); Phase 4 (Field Operations) code
+> written, awaiting verification**: `realtime`, `notifications`, `storage`, `events` modules and
+> the jobs module's evidence, messages and locations (see the module map). The NestJS application exists in
 > `apps/api` with configuration, Prisma/PostgreSQL, the HTTP pipeline, health checks, `auth`,
 > `users` (Phase 1) and `jobs` (Phase 2; since Phase 3 also idempotent device commands, field
 > notes and the worker's working set; see [api.md](api.md#jobs), [api.md](api.md#offline-sync)
@@ -50,11 +52,13 @@ open WebSocket connections.
 | `jobs` | Jobs, assignment, job history (`job_events`), job policy, field notes (`job_notes`), device-command idempotency (`processed_mutations`), the worker's working set | **Phase 2–3 (implemented)**; the state machine is in `@fieldops/shared` |
 | `audit` | Append-only audit log writer and query API (admin) | Phase 5 (job-related history already lives in `job_events`) |
 | `sync` | Batched push/pull, `change_log`, visibility filtering | Not needed yet: Phase 3 syncs through the jobs module's domain endpoints and a working-set snapshot ([synchronization.md](synchronization.md#deliberate-deviations-from-the-design-below)). Created when a second entity syncs or working sets outgrow snapshots |
-| `locations` | Batched location ingestion, latest-position queries, retention | V7 |
-| `messaging` | Conversations, messages, WebSocket delivery | V8 |
-| `realtime` | Socket.IO gateway, authentication on handshake, room policy, event envelopes | V8 |
-| `notifications` | Notification orchestration: preferences, deduplication, FCM delivery, device tokens | V9 (queue-backed in V12) |
-| `files` | Presigned upload/download URLs, attachment metadata, media post-processing | V9 |
+| `events` | In-process domain events published after commit (`job.changed`, `job.message.created`, `session.ended`) | **Phase 4**; transactional outbox + BullMQ in Phase 5 |
+| `storage` | `ObjectStorage` interface; local-disk implementation (`STORAGE_DIR`) | **Phase 4** |
+| `realtime` | Socket.IO gateway `/realtime`, authentication on handshake (`AccessTokenVerifier`), rooms from the job policy, event envelopes ([realtime.md](realtime.md)) | **Phase 4** |
+| `notifications` | Inbox, notification rules, FCM HTTP v1 delivery, device tokens per session ([notifications.md](notifications.md)) | **Phase 4** (queue-backed in Phase 5) |
+| `locations` | Batched location ingestion, latest-position queries, retention | Not needed: Phase 4 records on-demand fixes on job history entries ([location.md](location.md)); created if tracking is ever required |
+| `messaging` | Conversations beyond a job (1:1) | Not needed yet: job messages live in the jobs module (the job's policy and working set) |
+| `files` | Attachment metadata, media post-processing | Not needed yet: evidence is a jobs child collection using `storage` ([evidence.md](evidence.md)) |
 | `analytics` | Operational reporting (job throughput, on-time rate) | later, on demand |
 | `ai` | Controlled AI tools and use cases | V17 |
 
@@ -199,13 +203,14 @@ a failed compare-and-set rolls the record back with the change, so rejections ar
 recorded. The general `Idempotency-Key` interceptor for all critical commands remains Phase 5
 work.
 
-## 10. Realtime (V8)
+## 10. Realtime (built in Phase 4, see [realtime.md](realtime.md))
 
 - Socket.IO through NestJS gateways, **websocket-only transport**.
-- The access token is verified on handshake. Connections are dropped when the session is
-  revoked.
-- **Rooms:** `user:{id}`, `org:{id}:managers`, `job:{id}`. Joining a room is authorized by
-  the same policies as REST.
+- The access token is verified on handshake with the same checks as REST. Connections close
+  at token expiry and at sign-out (`session.ended`).
+- **Rooms (as built):** `user:{id}`, `session:{id}`, `managers` (single organization). There
+  are no client-joined `job:{id}` rooms: the server addresses a job's audience (managers and
+  the assigned worker) directly, which keeps authorization in one place.
 - **Event envelope:** `{ type, version, id, occurredAt, data }`, with versioned payload schemas
   in `@fieldops/shared`.
 - **Events are hints.** The authoritative state is always available through REST or sync.

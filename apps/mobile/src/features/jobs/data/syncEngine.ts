@@ -1,7 +1,10 @@
 import type {
   AddJobNoteRequest,
+  EvidenceContentType,
+  JobCommandRequest,
   JobDetail,
   JobWorkingSet,
+  SendJobMessageRequest,
 } from '@fieldops/types';
 
 import type { AppError } from '../../../utils/errors';
@@ -26,17 +29,43 @@ export interface JobSyncTransport {
   startJob(
     jobId: string,
     mutationId: string,
+    request: JobCommandRequest,
   ): Promise<TransportResult<JobDetail>>;
   completeJob(
     jobId: string,
     mutationId: string,
+    request: JobCommandRequest,
   ): Promise<TransportResult<JobDetail>>;
   addNote(
     jobId: string,
     mutationId: string,
     note: AddJobNoteRequest,
   ): Promise<TransportResult<JobDetail>>;
+  /** Multipart upload of a photo from app-private storage. */
+  uploadEvidence(
+    jobId: string,
+    mutationId: string,
+    evidence: EvidenceUpload,
+  ): Promise<TransportResult<JobDetail>>;
+  sendMessage(
+    jobId: string,
+    mutationId: string,
+    message: SendJobMessageRequest,
+  ): Promise<TransportResult<JobDetail>>;
   fetchWorkingSet(): Promise<TransportResult<JobWorkingSet>>;
+}
+
+export interface EvidenceUpload {
+  readonly id: string;
+  readonly fileUri: string;
+  readonly contentType: EvidenceContentType;
+  /** Device time of capture. */
+  readonly capturedAt: string;
+}
+
+/** Deletes photo files the device no longer needs (services/files in the app). */
+export interface EvidenceFileRemover {
+  remove(uri: string): Promise<void>;
 }
 
 /**
@@ -68,6 +97,8 @@ export interface JobSyncEngineOptions {
   readonly random?: () => number;
   readonly timers?: Timers;
   readonly policy?: RetryPolicy;
+  /** Without it (tests of other behavior), photo files are left in place. */
+  readonly files?: EvidenceFileRemover;
 }
 
 type StepOutcome = 'done' | 'offline' | 'unauthenticated' | 'error';
@@ -96,6 +127,7 @@ export class JobSyncEngine {
   private readonly random: () => number;
   private readonly timers: Timers;
   private readonly policy: RetryPolicy;
+  private readonly files: EvidenceFileRemover | undefined;
   private readonly listeners = new Set<(status: SyncStatus) => void>();
   private readonly unsubscribeStore: () => void;
 
@@ -122,6 +154,7 @@ export class JobSyncEngine {
       clear: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
     },
     policy = RETRY_POLICY,
+    files,
   }: JobSyncEngineOptions) {
     this.store = store;
     this.transport = transport;
@@ -129,6 +162,7 @@ export class JobSyncEngine {
     this.random = random;
     this.timers = timers;
     this.policy = policy;
+    this.files = files;
     // Local commands change the counts too.
     this.unsubscribeStore = store.subscribe(() => {
       this.refreshCounts().catch(() => undefined);
@@ -201,6 +235,7 @@ export class JobSyncEngine {
       await this.store.pruneSynced(
         new Date(this.now().getTime() - SYNCED_RETENTION_MS),
       );
+      await this.removeUnneededEvidenceFiles();
     } catch {
       // A local database failure: nothing was lost (every step is a transaction). Try again
       // later like any other failure.
@@ -299,15 +334,54 @@ export class JobSyncEngine {
   private send(entry: OutboxEntry): Promise<TransportResult<JobDetail>> {
     switch (entry.type) {
       case 'job.start':
-        return this.transport.startJob(entry.jobId, entry.mutationId);
+        return this.transport.startJob(
+          entry.jobId,
+          entry.mutationId,
+          withLocation(entry.payload?.location ?? null),
+        );
       case 'job.complete':
-        return this.transport.completeJob(entry.jobId, entry.mutationId);
+        return this.transport.completeJob(
+          entry.jobId,
+          entry.mutationId,
+          withLocation(entry.payload?.location ?? null),
+        );
       case 'job.note.add':
         return this.transport.addNote(entry.jobId, entry.mutationId, {
-          id: entry.payload?.noteId ?? entry.mutationId,
-          body: entry.payload?.body ?? '',
+          id: entry.payload.noteId,
+          body: entry.payload.body,
           occurredAt: entry.occurredAt,
         });
+      case 'job.evidence.add':
+        return this.transport.uploadEvidence(entry.jobId, entry.mutationId, {
+          id: entry.payload.evidenceId,
+          fileUri: entry.payload.fileUri,
+          contentType: entry.payload.contentType,
+          capturedAt: entry.occurredAt,
+        });
+      case 'job.message.send':
+        return this.transport.sendMessage(entry.jobId, entry.mutationId, {
+          id: entry.payload.messageId,
+          body: entry.payload.body,
+          occurredAt: entry.occurredAt,
+        });
+    }
+  }
+
+  /**
+   * Deletes photo files whose upload is settled and no longer shown (see
+   * LocalJobStore.evidenceFilesToDelete). A failed delete is retried next cycle.
+   */
+  private async removeUnneededEvidenceFiles(): Promise<void> {
+    if (this.files === undefined) {
+      return;
+    }
+    for (const file of await this.store.evidenceFilesToDelete()) {
+      try {
+        await this.files.remove(file.fileUri);
+        await this.store.forgetEvidenceFile(file.evidenceId);
+      } catch {
+        // Kept; tried again on the next cycle.
+      }
     }
   }
 
@@ -364,6 +438,12 @@ export class JobSyncEngine {
       listener(this.current);
     }
   }
+}
+
+function withLocation(
+  location: JobCommandRequest['location'] | null,
+): JobCommandRequest {
+  return location === null || location === undefined ? {} : { location };
 }
 
 function errorCode(error: AppError): string {

@@ -1,8 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
 import type {
+  ActionLocation,
+  EvidenceContentType,
   JobChecklistItem,
   JobDetail,
+  JobEvidence,
   JobHistoryEntry,
+  JobMessage,
   JobNote,
   JobPage,
   JobWorkingSet,
@@ -174,6 +178,106 @@ export class JobNoteDto implements JobNote {
   readonly createdAt: string;
 }
 
+export class ActionLocationDto implements ActionLocation {
+  @ApiProperty({ example: 12.9716 })
+  readonly latitude: number;
+
+  @ApiProperty({ example: 77.5946 })
+  readonly longitude: number;
+
+  @ApiProperty({ example: 12.5, description: 'Reported accuracy in meters.' })
+  readonly accuracyMeters: number;
+
+  @ApiProperty({
+    format: 'date-time',
+    description: 'Device time of the fix (informational).',
+  })
+  readonly capturedAt: string;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 42,
+    description:
+      'Distance from the job site in meters, computed by the server; null when the job has no coordinates.',
+  })
+  readonly distanceMeters: number | null;
+}
+
+export class JobEvidenceDto implements JobEvidence {
+  @ApiProperty({ format: 'uuid' })
+  readonly id: string;
+
+  @ApiProperty({ enum: ['image/jpeg', 'image/png'] })
+  readonly contentType: EvidenceContentType;
+
+  @ApiProperty({ example: 412_345 })
+  readonly sizeBytes: number;
+
+  @ApiProperty({ example: 1920 })
+  readonly width: number;
+
+  @ApiProperty({ example: 1440 })
+  readonly height: number;
+
+  @ApiProperty({ type: UserSummaryDto })
+  readonly uploadedBy: UserSummaryDto;
+
+  @ApiProperty({
+    format: 'date-time',
+    description: 'Device time of capture (informational).',
+  })
+  readonly capturedAt: string;
+
+  @ApiProperty({ format: 'date-time', description: 'Server receipt time.' })
+  readonly createdAt: string;
+}
+
+export class JobMessageDto implements JobMessage {
+  @ApiProperty({ format: 'uuid' })
+  readonly id: string;
+
+  @ApiProperty({ example: 'On my way, 10 minutes.' })
+  readonly body: string;
+
+  @ApiProperty({ type: UserSummaryDto })
+  readonly author: UserSummaryDto;
+
+  @ApiProperty({ format: 'date-time', description: 'Device time (informational).' })
+  readonly occurredAt: string;
+
+  @ApiProperty({ format: 'date-time', description: 'Server receipt time.' })
+  readonly createdAt: string;
+}
+
+type EventRow = JobDetailRecord['events'][number];
+
+/** The location of the latest event of `type` that has one. */
+function locationOf(
+  events: readonly EventRow[],
+  type: 'STARTED' | 'COMPLETED',
+): ActionLocation | null {
+  const event = events.findLast(
+    row => row.type === type && row.latitude !== null,
+  );
+  if (
+    event === undefined ||
+    event.latitude === null ||
+    event.longitude === null ||
+    event.accuracyMeters === null ||
+    event.locatedAt === null
+  ) {
+    return null;
+  }
+  return {
+    latitude: event.latitude,
+    longitude: event.longitude,
+    accuracyMeters: event.accuracyMeters,
+    capturedAt: event.locatedAt.toISOString(),
+    distanceMeters: event.distanceMeters,
+  };
+}
+
 export class JobDetailDto extends JobSummaryDto implements JobDetail {
   @ApiProperty({ type: String, nullable: true })
   readonly description: string | null;
@@ -213,6 +317,25 @@ export class JobDetailDto extends JobSummaryDto implements JobDetail {
     description: 'Worker field notes, in the order the server received them.',
   })
   readonly fieldNotes: JobNoteDto[];
+
+  @ApiProperty({ type: ActionLocationDto, nullable: true })
+  readonly startLocation: ActionLocationDto | null;
+
+  @ApiProperty({ type: ActionLocationDto, nullable: true })
+  readonly completeLocation: ActionLocationDto | null;
+
+  @ApiProperty({
+    type: [JobEvidenceDto],
+    description:
+      'Photos, oldest first. Download one with GET /jobs/{id}/evidence/{evidenceId}/content.',
+  })
+  readonly evidence: JobEvidenceDto[];
+
+  @ApiProperty({
+    type: [JobMessageDto],
+    description: 'The latest messages (at most 100), oldest first.',
+  })
+  readonly messages: JobMessageDto[];
 
   static override from(
     job: JobDetailRecord,
@@ -254,6 +377,28 @@ export class JobDetailDto extends JobSummaryDto implements JobDetail {
         occurredAt: note.occurredAt.toISOString(),
         createdAt: note.createdAt.toISOString(),
       })),
+      startLocation: locationOf(job.events, 'STARTED'),
+      completeLocation: locationOf(job.events, 'COMPLETED'),
+      evidence: job.evidence.map(item => ({
+        id: item.id,
+        contentType: item.contentType as EvidenceContentType,
+        sizeBytes: item.sizeBytes,
+        width: item.width,
+        height: item.height,
+        uploadedBy: UserSummaryDto.from(item.uploadedBy),
+        capturedAt: item.capturedAt.toISOString(),
+        createdAt: item.createdAt.toISOString(),
+      })),
+      // Loaded newest first (to keep the latest 100); shown oldest first.
+      messages: job.messages
+        .map(message => ({
+          id: message.id,
+          body: message.body,
+          author: UserSummaryDto.from(message.author),
+          occurredAt: message.occurredAt.toISOString(),
+          createdAt: message.createdAt.toISOString(),
+        }))
+        .reverse(),
     } satisfies JobDetail);
   }
 }

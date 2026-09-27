@@ -24,6 +24,17 @@ describe('classifyFailure', () => {
       'rejected',
     ],
     ['an ended session', httpError(401, 'SESSION_REVOKED'), 'unauthenticated'],
+    ['an oversized photo', httpError(413, 'PAYLOAD_TOO_LARGE'), 'rejected'],
+    [
+      'an unsupported photo',
+      httpError(415, 'UNSUPPORTED_FILE_TYPE'),
+      'rejected',
+    ],
+    [
+      'a photo whose file is gone',
+      { kind: 'unexpected', code: 'LOCAL_FILE_MISSING', message: 'gone' },
+      'rejected',
+    ],
   ] as const)('treats %s as %s', (_case, error, kind) => {
     expect(classifyFailure(error)).toBe(kind);
   });

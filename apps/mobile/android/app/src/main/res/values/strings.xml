@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">FieldOps</string>
+    <string name="notification_channel_jobs">Jobs and messages</string>
+    <string name="notification_channel_jobs_description">New assignments, cancellations, completions and job messages.</string>
 </resources>

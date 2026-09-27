@@ -1,4 +1,5 @@
 import {
+  EVIDENCE_CONTENT_TYPES,
   JobAction,
   JobEventType,
   JobPriority,
@@ -124,6 +125,44 @@ function isLocation(value: unknown): boolean {
   return isNumber(latitude) && isNumber(longitude);
 }
 
+function isActionLocation(value: unknown): boolean {
+  if (value === null) {
+    return true;
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  const { latitude, longitude, accuracyMeters, capturedAt, distanceMeters } =
+    value;
+  return (
+    [latitude, longitude, accuracyMeters].every(isNumber) &&
+    isString(capturedAt) &&
+    (distanceMeters === null || isNumber(distanceMeters))
+  );
+}
+
+function isEvidence(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const {
+    id,
+    contentType,
+    sizeBytes,
+    width,
+    height,
+    uploadedBy,
+    capturedAt,
+    createdAt,
+  } = value;
+  return (
+    [id, capturedAt, createdAt].every(isString) &&
+    (EVIDENCE_CONTENT_TYPES as readonly unknown[]).includes(contentType) &&
+    [sizeBytes, width, height].every(isNumber) &&
+    isUserSummary(uploadedBy)
+  );
+}
+
 export function isJobDetail(value: unknown): value is JobDetail {
   if (!isJobSummary(value) || !isRecord(value)) {
     return false;
@@ -141,6 +180,10 @@ export function isJobDetail(value: unknown): value is JobDetail {
     checklist,
     history,
     fieldNotes,
+    startLocation,
+    completeLocation,
+    evidence,
+    messages,
   } = value as Record<string, unknown>;
   return (
     [
@@ -156,7 +199,12 @@ export function isJobDetail(value: unknown): value is JobDetail {
     isUserSummary(createdBy) &&
     isArrayOf(checklist, isChecklistItem) &&
     isArrayOf(history, isHistoryEntry) &&
-    isArrayOf(fieldNotes, isJobNote)
+    isArrayOf(fieldNotes, isJobNote) &&
+    isActionLocation(startLocation) &&
+    isActionLocation(completeLocation) &&
+    isArrayOf(evidence, isEvidence) &&
+    // Messages have the same shape as notes (id, body, author, two timestamps).
+    isArrayOf(messages, isJobNote)
   );
 }
 

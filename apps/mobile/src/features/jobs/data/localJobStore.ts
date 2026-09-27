@@ -1,5 +1,6 @@
 import { nextStatus } from '@fieldops/shared';
 import type {
+  DeviceLocation,
   JobDetail,
   JobStatus,
   JobWorkingSet,
@@ -19,12 +20,16 @@ import { isJobDetail } from '../api/contracts';
 import { projectJob } from './projection';
 import {
   LocalCommandError,
+  type EvidencePayload,
+  type EvidenceUploadState,
+  type LocalEvidenceFile,
   type LocalJob,
-  type NotePayload,
+  type OutboxCommand,
   type OutboxCounts,
   type OutboxEntry,
   type OutboxError,
   type OutboxType,
+  type StatusPayload,
 } from './types';
 
 /** Outbox statuses that still change what the worker sees. */
@@ -43,24 +48,60 @@ export interface LocalJobStoreOptions {
   readonly now?: () => Date;
 }
 
+/**
+ * Fields added to JobDetail after a job may have been stored (schema v1 wrote jobs before
+ * Phase 4). Filled with their empty values when read; the next sync stores the server's.
+ */
+const PHASE_4_DEFAULTS = {
+  startLocation: null,
+  completeLocation: null,
+  evidence: [],
+  messages: [],
+} as const;
+
 function parseJob(json: string): JobDetail {
-  const value: unknown = JSON.parse(json);
+  const parsed: unknown = JSON.parse(json);
+  const value =
+    typeof parsed === 'object' && parsed !== null
+      ? { ...PHASE_4_DEFAULTS, ...parsed }
+      : parsed;
   if (!isJobDetail(value)) {
     throw new Error('Stored job does not match the job contract');
   }
   return value;
 }
 
+/** The stored payload of an entry, typed by its command. */
+function toCommand(type: OutboxType, payload: string | null): OutboxCommand {
+  const value: unknown = payload === null ? null : JSON.parse(payload);
+  switch (type) {
+    case 'job.start':
+    case 'job.complete':
+      return {
+        type,
+        payload: value === null ? null : (value as StatusPayload),
+      } as OutboxCommand;
+    case 'job.note.add':
+    case 'job.evidence.add':
+    case 'job.message.send':
+      if (value === null) {
+        throw new Error(`Outbox entry ${type} has no payload`);
+      }
+      return { type, payload: value } as OutboxCommand;
+  }
+}
+
 function toEntry(row: SqlRow): OutboxEntry {
   const code = optionalText(row, 'last_error_code');
-  const payload = optionalText(row, 'payload');
   return {
     seq: integer(row, 'seq'),
     mutationId: text(row, 'mutation_id'),
-    type: text(row, 'type') as OutboxType,
+    ...toCommand(
+      text(row, 'type') as OutboxType,
+      optionalText(row, 'payload'),
+    ),
     jobId: text(row, 'job_id'),
     jobTitle: text(row, 'job_title'),
-    payload: payload === null ? null : (JSON.parse(payload) as NotePayload),
     baseVersion: integer(row, 'base_version'),
     occurredAt: text(row, 'occurred_at'),
     status: text(row, 'status') as OutboxEntry['status'],
@@ -73,6 +114,21 @@ function toEntry(row: SqlRow): OutboxEntry {
         : { code, message: optionalText(row, 'last_error_message') ?? '' },
     createdAt: text(row, 'created_at'),
   };
+}
+
+/** An evidence file's state from its upload entry's status (none left: it is on the server). */
+function uploadState(status: string | null): EvidenceUploadState {
+  switch (status) {
+    case 'pending':
+      return 'pending';
+    case 'in_flight':
+      return 'uploading';
+    case 'failed':
+    case 'conflict':
+      return 'failed';
+    default:
+      return 'uploaded';
+  }
 }
 
 function toLocalJob(row: SqlRow): LocalJob {
@@ -156,6 +212,15 @@ export class LocalJobStore {
     return rows.map(toEntry);
   }
 
+  /** A job's commands still on their way to the server (pending or being sent). */
+  async activeEntries(jobId: string): Promise<OutboxEntry[]> {
+    const rows = await this.db.all(
+      `SELECT * FROM outbox WHERE job_id = ? AND status IN ${ACTIVE} ORDER BY seq`,
+      [jobId],
+    );
+    return rows.map(toEntry);
+  }
+
   /** Rejected entries the worker has not dismissed yet, oldest first. */
   async problemEntries(jobId?: string): Promise<OutboxEntry[]> {
     const rows = await this.db.all(
@@ -188,6 +253,46 @@ export class LocalJobStore {
     };
   }
 
+  /** The job's photos stored on this phone, with how far their upload has got. */
+  async evidenceFiles(jobId: string): Promise<LocalEvidenceFile[]> {
+    const rows = await this.db.all(
+      `SELECT f.evidence_id, f.file_uri, o.status
+       FROM evidence_files f LEFT JOIN outbox o ON o.mutation_id = f.mutation_id
+       WHERE f.job_id = ? ORDER BY f.created_at`,
+      [jobId],
+    );
+    return rows.map(row => ({
+      evidenceId: text(row, 'evidence_id'),
+      fileUri: text(row, 'file_uri'),
+      state: uploadState(optionalText(row, 'status')),
+    }));
+  }
+
+  /**
+   * Photo files nothing needs any more: their upload entry is gone (dismissed, or synced and
+   * pruned), or it synced and the job has left the device. The caller deletes each file,
+   * then forgets it (forgetEvidenceFile), so a crash in between only retries the delete.
+   */
+  async evidenceFilesToDelete(): Promise<LocalEvidenceFile[]> {
+    const rows = await this.db.all(
+      `SELECT f.evidence_id, f.file_uri, o.status
+       FROM evidence_files f LEFT JOIN outbox o ON o.mutation_id = f.mutation_id
+       WHERE o.seq IS NULL
+          OR (o.status = 'synced' AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = f.job_id))`,
+    );
+    return rows.map(row => ({
+      evidenceId: text(row, 'evidence_id'),
+      fileUri: text(row, 'file_uri'),
+      state: uploadState(optionalText(row, 'status')),
+    }));
+  }
+
+  async forgetEvidenceFile(evidenceId: string): Promise<void> {
+    await this.write(tx => {
+      tx.run('DELETE FROM evidence_files WHERE evidence_id = ?', [evidenceId]);
+    });
+  }
+
   async getMeta(key: string): Promise<string | null> {
     const [row] = await this.db.all(
       'SELECT value FROM sync_state WHERE key = ?',
@@ -198,34 +303,80 @@ export class LocalJobStore {
 
   // ---- Local commands (work offline) -------------------------------------------------
 
-  /** The worker starts the job. Committed locally; the sync engine sends it later. */
-  startJob(jobId: string): Promise<OutboxEntry> {
-    return this.command(jobId, 'job.start', null, job => {
-      if (nextStatus(job.status, 'start') === undefined) {
-        throw new LocalCommandError(
-          'INVALID_STATUS_TRANSITION',
-          'This job can no longer be started.',
-        );
-      }
-    });
+  /**
+   * The worker starts the job, with their position if the phone had one. Committed locally;
+   * the sync engine sends it later.
+   */
+  startJob(
+    jobId: string,
+    location: DeviceLocation | null = null,
+  ): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.start', payload: { location } },
+      job => {
+        if (nextStatus(job.status, 'start') === undefined) {
+          throw new LocalCommandError(
+            'INVALID_STATUS_TRANSITION',
+            'This job can no longer be started.',
+          );
+        }
+      },
+    );
   }
 
-  completeJob(jobId: string): Promise<OutboxEntry> {
-    return this.command(jobId, 'job.complete', null, job => {
-      if (nextStatus(job.status, 'complete') === undefined) {
-        throw new LocalCommandError(
-          'INVALID_STATUS_TRANSITION',
-          'Only a job in progress can be completed.',
-        );
-      }
-    });
+  completeJob(
+    jobId: string,
+    location: DeviceLocation | null = null,
+  ): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.complete', payload: { location } },
+      job => {
+        if (nextStatus(job.status, 'complete') === undefined) {
+          throw new LocalCommandError(
+            'INVALID_STATUS_TRANSITION',
+            'Only a job in progress can be completed.',
+          );
+        }
+      },
+    );
   }
 
   addNote(jobId: string, body: string): Promise<OutboxEntry> {
     const now = this.now();
-    return this.command(jobId, 'job.note.add', {
-      noteId: uuidv7(now.getTime()),
-      body: body.trim(),
+    return this.command(jobId, {
+      type: 'job.note.add',
+      payload: { noteId: uuidv7(now.getTime()), body: body.trim() },
+    });
+  }
+
+  /**
+   * Attaches a photo already copied into app-private storage. The outbox entry (the upload)
+   * and the file's record are written in one transaction, so a photo is either queued with
+   * its file known, or not at all.
+   */
+  addEvidence(jobId: string, evidence: EvidencePayload): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.evidence.add', payload: evidence },
+      undefined,
+      (tx, mutationId, now) => {
+        tx.run(
+          `INSERT INTO evidence_files (evidence_id, mutation_id, job_id, file_uri, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+          [evidence.evidenceId, mutationId, jobId, evidence.fileUri, now],
+        );
+      },
+    );
+  }
+
+  /** A message to the job's managers. Shown at once, delivered by the sync engine. */
+  sendMessage(jobId: string, body: string): Promise<OutboxEntry> {
+    const now = this.now();
+    return this.command(jobId, {
+      type: 'job.message.send',
+      payload: { messageId: uuidv7(now.getTime()), body: body.trim() },
     });
   }
 
@@ -236,9 +387,13 @@ export class LocalJobStore {
    */
   private async command(
     jobId: string,
-    type: OutboxType,
-    payload: NotePayload | null,
+    command: OutboxCommand,
     validate: (job: JobDetail) => void = () => undefined,
+    alsoWrite: (
+      tx: SqlTransaction,
+      mutationId: string,
+      now: string,
+    ) => void = () => undefined,
   ): Promise<OutboxEntry> {
     const now = this.now().toISOString();
     const mutationId = uuidv7(Date.parse(now));
@@ -261,16 +416,17 @@ export class LocalJobStore {
          VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
         [
           mutationId,
-          type,
+          command.type,
           jobId,
           job.title,
-          payload === null ? null : JSON.stringify(payload),
+          command.payload === null ? null : JSON.stringify(command.payload),
           integer(row, 'server_version'),
           now,
           now,
           now,
         ],
       );
+      alsoWrite(tx, mutationId, now);
       this.reproject(tx, jobId);
       const [inserted] = tx.all(
         'SELECT seq FROM outbox WHERE mutation_id = ?',

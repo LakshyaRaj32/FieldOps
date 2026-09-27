@@ -79,6 +79,8 @@ node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'
 | `REFRESH_TOKEN_EXPIRATION` | `30d` | Sliding session lifetime |
 | `CORS_ORIGINS` | empty (CORS off) | Comma-separated browser origins; `*` is refused |
 | `SWAGGER_ENABLED` | `true` (`false` in production) | |
+| `STORAGE_DIR` | `./storage` | Job evidence files (Phase 4); gitignored. A deployment points it at a persistent volume |
+| `FCM_SERVICE_ACCOUNT_FILE` | empty (push disabled) | Path of the Firebase service-account JSON (a secret, gitignored); see [notifications.md](notifications.md#setup-push) |
 
 Configuration is validated at start-up (`src/config/app-config.ts`). An invalid value stops
 the process with a list of every problem. Secret values are never printed.
@@ -167,7 +169,7 @@ A typical Render web service (not created yet; deployment is part of a later ver
 | Build command | `npm ci && npm run api:build && npm run db:deploy` |
 | Start command | `npm run api:start` |
 | Health check path | `/health/ready` |
-| Environment | `APP_ENV=staging`, `DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, optionally `CORS_ORIGINS`, `SWAGGER_ENABLED` |
+| Environment | `APP_ENV=staging`, `DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, optionally `CORS_ORIGINS`, `SWAGGER_ENABLED`, `STORAGE_DIR` (on a persistent disk), `FCM_SERVICE_ACCOUNT_FILE` |
 
 The mobile staging build then points `API_BASE_URL` at the service's `https://` URL.
 

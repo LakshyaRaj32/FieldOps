@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import { DashboardScreen } from '../../features/dashboard/screens/DashboardScreen';
+import { useGetNotificationsQuery } from '../../features/notifications/api/notificationsApi';
 import { NotificationsScreen } from '../../features/notifications/screens/NotificationsScreen';
 import { ProfileScreen } from '../../features/profile/screens/ProfileScreen';
 import { useTheme } from '../../theme';
@@ -39,6 +40,9 @@ const renderPlainLayout = ({
 /** Authenticated flow: the main tabs. */
 export function AppNavigator(): React.JSX.Element {
   const theme = useTheme();
+  // Refreshed by realtime events and pushes (app/providers/RealtimeConnection).
+  const { data: inbox } = useGetNotificationsQuery();
+  const unread = inbox?.unreadCount ?? 0;
   return (
     <Tab.Navigator
       screenLayout={renderScreenLayout}
@@ -58,7 +62,11 @@ export function AppNavigator(): React.JSX.Element {
         options={{ headerShown: false }}
         layout={renderPlainLayout}
       />
-      <Tab.Screen name="Notifications" component={NotificationsScreen} />
+      <Tab.Screen
+        name="Notifications"
+        component={NotificationsScreen}
+        options={unread > 0 ? { tabBarBadge: unread } : {}}
+      />
       <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );

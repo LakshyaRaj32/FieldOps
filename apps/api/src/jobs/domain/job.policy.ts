@@ -27,7 +27,9 @@ export type JobPermission =
   | 'job:cancel'
   | 'job:delete'
   | 'job:work'
-  | 'job:note';
+  | 'job:note'
+  | 'job:evidence'
+  | 'job:message';
 
 const MANAGERS: readonly Role[] = [Role.MANAGER, Role.ADMIN];
 const WORKERS: readonly Role[] = [Role.WORKER];
@@ -45,6 +47,10 @@ export const JOB_PERMISSIONS: Readonly<Record<JobPermission, readonly Role[]>> =
     'job:work': WORKERS,
     // Field notes come from the assigned worker too.
     'job:note': WORKERS,
+    // So do photos (evidence); managers read them through job:read:all.
+    'job:evidence': WORKERS,
+    // The job's conversation: its worker (see canView) and the managers.
+    'job:message': [...WORKERS, ...MANAGERS],
   };
 
 /** The permission each action on an existing job requires. */
@@ -56,6 +62,8 @@ export const ACTION_PERMISSION: Readonly<Record<JobAction, JobPermission>> = {
   [JobAction.CANCEL]: 'job:cancel',
   [JobAction.DELETE]: 'job:delete',
   [JobAction.NOTE]: 'job:note',
+  [JobAction.EVIDENCE]: 'job:evidence',
+  [JobAction.MESSAGE]: 'job:message',
 };
 
 /** Roles holding a permission: for @Roles() route gates. */
@@ -103,13 +111,25 @@ export function statusAllows(status: JobStatus, action: JobAction): boolean {
     case JobAction.DELETE:
       return isDeletable(status);
     case JobAction.NOTE:
+    case JobAction.EVIDENCE:
       // Evidence is always welcome, also on a closed job ("found a leak after finishing").
+      return true;
+    case JobAction.MESSAGE:
+      // Follow-up questions happen after completion or cancellation too.
       return true;
   }
 }
 
-/** Permissions that only the job's assigned worker may use on it. */
-const ASSIGNEE_ONLY: readonly JobPermission[] = ['job:work', 'job:note'];
+/**
+ * Permissions that only the job's assigned worker may use on it. (`job:message` is not in the
+ * list because managers hold it too; a worker still messages only on their own jobs, because
+ * canView shows a worker nothing else.)
+ */
+const ASSIGNEE_ONLY: readonly JobPermission[] = [
+  'job:work',
+  'job:note',
+  'job:evidence',
+];
 
 /**
  * Whether the user holds the permission for the action AND stands in the right relationship
@@ -134,6 +154,8 @@ const ACTION_ORDER: readonly JobAction[] = [
   JobAction.START,
   JobAction.COMPLETE,
   JobAction.NOTE,
+  JobAction.EVIDENCE,
+  JobAction.MESSAGE,
   JobAction.ASSIGN,
   JobAction.EDIT,
   JobAction.CANCEL,

@@ -16,4 +16,8 @@ export const TEST_ENV = {
   REFRESH_TOKEN_EXPIRATION: '30d',
   CORS_ORIGINS: '',
   SWAGGER_ENABLED: 'false',
+  // Evidence written by the E2E tests; emptied by the tests that use it (gitignored).
+  STORAGE_DIR: './test-storage',
+  // Push goes to a recording fake in tests (test/helpers/test-app.ts).
+  FCM_SERVICE_ACCOUNT_FILE: '',
 } as const;

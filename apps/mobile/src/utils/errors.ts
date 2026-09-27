@@ -72,6 +72,9 @@ const CODE_MESSAGES: Partial<Record<ApiErrorCode, string>> = {
     "That worker can't be assigned jobs. Choose another worker.",
   VERSION_CONFLICT:
     'Someone else changed this job. The latest version has been loaded; please try again.',
+  PAYLOAD_TOO_LARGE: 'The photo is larger than 10 MB.',
+  UNSUPPORTED_FILE_TYPE: 'Only JPEG and PNG photos can be attached.',
+  EVIDENCE_LIMIT_REACHED: 'This job already has the maximum number of photos.',
 };
 
 function messageForStatus(status: number): string {

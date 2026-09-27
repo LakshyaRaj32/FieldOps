@@ -10,8 +10,9 @@ infrastructure
 
 > **Current status:** Phase 1 complete. Phases 2 and 3 implemented and verified by automated
 > tests (including the offline data layer against the real API); both await verification on
-> the physical Android phone. Next: Phase 4. Details, decisions and known issues:
-> [phase-status.md](phase-status.md).
+> the physical Android phone. Phase 4 code is written (location, realtime, notifications,
+> evidence, messages) but has not been installed, tested, built or run yet. Details, decisions
+> and known issues: [phase-status.md](phase-status.md).
 >
 > ```text
 > V0 COMPLETE · V1 COMPLETE · V2 COMPLETE
@@ -22,7 +23,9 @@ infrastructure
 >         ↓
 > Phase 3 — Offline-First       IMPLEMENTED (device check pending)
 >         ↓
-> Phase 4 — Field Operations    NEXT
+> Phase 4 — Field Operations    CODE WRITTEN (install, tests, build, device check pending)
+>         ↓
+> Phase 5 — Production Eng.     NOT STARTED
 > ```
 
 ## 1. Project Vision
@@ -618,6 +621,23 @@ strong reason.
 
 **Checkpoint:** `phase-4-field-operations`
 
+**Status:** code written, not yet verified (see [phase-status.md](phase-status.md#phase-4--field-operations)).
+Scope as built, narrowed where the plan said "where justified":
+
+- **Location:** on-demand foreground fixes at start/complete and "check my distance", through a
+  small Kotlin module on `LocationManager`; recorded with a server-computed distance, never
+  enforced. No foreground service, batching or geofencing (no workflow needs tracking yet)
+  ([location.md](location.md)).
+- **Messaging:** job-specific messages between the assigned worker and managers, persisted,
+  offline through the outbox, delivered with the working set, realtime hints. 1:1 chat outside
+  jobs, presence, read and delivery receipts are not built ([realtime.md](realtime.md)).
+- **Notifications:** inbox with unread count, FCM push (HTTP v1), Android channel, permission
+  handling, job-event and message notifications. Preferences are not built
+  ([notifications.md](notifications.md)).
+- **Files and evidence:** photos through the outbox to object storage (local disk behind an
+  interface), metadata in PostgreSQL, EXIF stripped. Documents and signatures are not built
+  ([evidence.md](evidence.md)).
+
 ------------------------------------------------------------------------
 
 # PHASE 5 --- PRODUCTION ENGINEERING
@@ -998,6 +1018,10 @@ FieldOps/
 │   ├── backend-architecture.md
 │   ├── offline-first.md
 │   ├── synchronization.md
+│   ├── location.md
+│   ├── realtime.md
+│   ├── notifications.md
+│   ├── evidence.md
 │   ├── devops.md
 │   ├── ai-architecture.md
 │   └── engineering-principles.md

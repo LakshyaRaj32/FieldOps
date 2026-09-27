@@ -8,6 +8,8 @@ import { OfflineJobsProvider } from '../../features/jobs/data/OfflineJobsProvide
 import { store } from '../../store';
 import { ThemeProvider, useTheme } from '../../theme';
 import { AppServices } from './AppServices';
+import { PushNotifications } from './PushNotifications';
+import { RealtimeConnection } from './RealtimeConnection';
 
 function ThemedStatusBar(): React.JSX.Element {
   const theme = useTheme();
@@ -32,7 +34,12 @@ export function AppProviders({
           <ThemedStatusBar />
           <ErrorBoundary>
             <AppServices />
-            <OfflineJobsProvider>{children}</OfflineJobsProvider>
+            <OfflineJobsProvider>
+              {/* Both refresh through the offline session, so they sit inside it. */}
+              <RealtimeConnection>
+                <PushNotifications>{children}</PushNotifications>
+              </RealtimeConnection>
+            </OfflineJobsProvider>
           </ErrorBoundary>
         </ThemeProvider>
       </ReduxProvider>

@@ -1,6 +1,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+      Foreground location only, requested when the worker starts or completes a job or checks
+      their distance to the site. No background location permission: FieldOps does not track
+      workers (docs/location.md). COARSE lets a worker grant "approximate" on Android 12+.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Android 13+: runtime permission for push notifications (asked after sign-in). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+      No CAMERA permission on purpose: the image picker opens the system camera app through an
+      intent, which needs no permission as long as this app does not declare CAMERA.
+    -->
 
     <application
       android:name=".MainApplication"
@@ -23,5 +36,9 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
       </activity>
+      <!--
+        FCM's default notification channel ("jobs", created in MainApplication.kt) is set in
+        apps/mobile/firebase.json, which React Native Firebase merges into its own manifest.
+      -->
     </application>
 </manifest>

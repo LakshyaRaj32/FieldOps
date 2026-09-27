@@ -7,12 +7,27 @@ import { LoadingState } from '../../../components/common/LoadingState';
 import { Screen } from '../../../components/ui';
 import { useTheme } from '../../../theme';
 import { toAppError, type AppError } from '../../../utils/errors';
+import { uuidv7 } from '../../../utils/uuid';
 import {
   useCancelJobMutation,
   useDeleteJobMutation,
   useGetJobQuery,
+  useSendJobMessageMutation,
 } from '../api/jobsApi';
-import { jobCommands, type JobCommand } from '../presentation';
+import {
+  formatSchedule,
+  fullName,
+  jobCommands,
+  type JobCommand,
+} from '../presentation';
+import { serverEvidenceSource } from './evidenceSource';
+import {
+  EvidenceGallery,
+  JobMessages,
+  JobSiteCard,
+  JobVisitLocations,
+} from './FieldOperationSections';
+import { MessageComposer } from './MessageComposer';
 import {
   confirmThen,
   JobChecklist,
@@ -25,7 +40,8 @@ import {
 
 /**
  * A manager's or admin's view of a job: online, with the actions the server allows them
- * (assign, edit, cancel, delete) and the worker's field notes.
+ * (assign, edit, cancel, delete), the worker's field notes, photos and visit positions, and
+ * the job's conversation. Realtime events refetch it (app/providers/RealtimeConnection).
  */
 export function ManagerJobDetail({
   jobId,
@@ -48,7 +64,9 @@ export function ManagerJobDetail({
   } = useGetJobQuery(jobId);
   const [cancel, cancelState] = useCancelJobMutation();
   const [remove, removeState] = useDeleteJobMutation();
+  const [sendMessage, messageState] = useSendJobMessageMutation();
   const [commandError, setCommandError] = useState<AppError | undefined>();
+  const [messageError, setMessageError] = useState<AppError | undefined>();
   const busy = cancelState.isLoading || removeState.isLoading;
 
   const refresh = () => {
@@ -127,7 +145,47 @@ export function ManagerJobDetail({
         <ErrorState title="That didn't work" error={commandError} />
       ) : null}
       <JobInformation job={job} showAssignee />
+      <JobSiteCard job={job} />
+      <JobVisitLocations job={job} />
       <JobChecklist job={job} />
+      <EvidenceGallery
+        items={job.evidence.map(evidence => ({
+          id: evidence.id,
+          source: serverEvidenceSource(job.id, evidence.id),
+          caption: `${fullName(evidence.uploadedBy)} · ${formatSchedule(
+            evidence.capturedAt,
+          )}`,
+        }))}
+      />
+      <JobMessages
+        job={job}
+        {...(job.allowedActions.includes(JobAction.MESSAGE) && {
+          composer: (
+            <>
+              <MessageComposer
+                busy={messageState.isLoading}
+                onSend={body => {
+                  setMessageError(undefined);
+                  // The message ID doubles as the idempotency key: a retry is one message.
+                  const id = uuidv7();
+                  sendMessage({
+                    id: job.id,
+                    idempotencyKey: id,
+                    message: { id, body, occurredAt: new Date().toISOString() },
+                  })
+                    .unwrap()
+                    .catch((failure: unknown) =>
+                      setMessageError(toAppError(failure)),
+                    );
+                }}
+              />
+              {messageError !== undefined ? (
+                <ErrorState title="Message not sent" error={messageError} />
+              ) : null}
+            </>
+          ),
+        })}
+      />
       <JobFieldNotes job={job} />
       <JobHistory job={job} />
     </Screen>

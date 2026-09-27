@@ -12,6 +12,11 @@
       "types": "./src/job-state-machine.ts",
       "react-native": "./src/job-state-machine.ts",
       "default": "./dist/job-state-machine.js"
+    },
+    "./geo": {
+      "types": "./src/geo.ts",
+      "react-native": "./src/geo.ts",
+      "default": "./dist/geo.js"
     }
   },
   "scripts": {

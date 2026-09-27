@@ -18,6 +18,7 @@ import { signOut } from '../../auth/session';
 import { SyncCard } from '../../jobs/components/SyncCard';
 import { useOfflineJobs } from '../../jobs/data/OfflineJobsContext';
 import { DiagnosticsCard } from '../components/DiagnosticsCard';
+import { LiveUpdatesCard } from '../components/LiveUpdatesCard';
 import { InfoRow } from '../../../components/common/InfoRow';
 
 const THEME_OPTIONS: readonly SegmentedOption<ThemePreference>[] = [
@@ -99,6 +100,8 @@ export function ProfileScreen(
       </Card>
 
       <SyncCard />
+
+      <LiveUpdatesCard />
 
       <DiagnosticsCard />
 

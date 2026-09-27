@@ -1,7 +1,16 @@
-import type { JobDetail } from '@fieldops/types';
+import type {
+  DeviceLocation,
+  EvidenceContentType,
+  JobDetail,
+} from '@fieldops/types';
 
 /** The worker commands that work offline. Names follow the `entity.action` convention. */
-export type OutboxType = 'job.start' | 'job.complete' | 'job.note.add';
+export type OutboxType =
+  | 'job.start'
+  | 'job.complete'
+  | 'job.note.add'
+  | 'job.evidence.add'
+  | 'job.message.send';
 
 /**
  * - `pending`: waiting to be sent (possibly until `nextAttemptAt`)
@@ -19,24 +28,53 @@ export type OutboxStatus =
   | 'failed'
   | 'conflict';
 
+/** Start and complete: where the worker was, if the phone had a fix (Phase 4). */
+export interface StatusPayload {
+  readonly location: DeviceLocation | null;
+}
+
 export interface NotePayload {
   readonly noteId: string;
   readonly body: string;
 }
+
+/** A photo waiting to upload. The bytes stay in app-private storage at `fileUri`. */
+export interface EvidencePayload {
+  readonly evidenceId: string;
+  readonly fileUri: string;
+  readonly contentType: EvidenceContentType;
+  readonly sizeBytes: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface MessagePayload {
+  readonly messageId: string;
+  readonly body: string;
+}
+
+/** Each command type with the payload it carries. */
+export type OutboxCommand =
+  | {
+      readonly type: 'job.start' | 'job.complete';
+      /** Null for entries written before Phase 4. */
+      readonly payload: StatusPayload | null;
+    }
+  | { readonly type: 'job.note.add'; readonly payload: NotePayload }
+  | { readonly type: 'job.evidence.add'; readonly payload: EvidencePayload }
+  | { readonly type: 'job.message.send'; readonly payload: MessagePayload };
 
 export interface OutboxError {
   readonly code: string;
   readonly message: string;
 }
 
-export interface OutboxEntry {
+interface OutboxEntryBase {
   readonly seq: number;
   readonly mutationId: string;
-  readonly type: OutboxType;
   readonly jobId: string;
   /** Kept for display: the job may leave the device before the entry is resolved. */
   readonly jobTitle: string;
-  readonly payload: NotePayload | null;
   /** The server version the worker was looking at (diagnostics). */
   readonly baseVersion: number;
   /** Device time of the action. */
@@ -49,6 +87,8 @@ export interface OutboxEntry {
   readonly lastError: OutboxError | null;
   readonly createdAt: string;
 }
+
+export type OutboxEntry = OutboxEntryBase & OutboxCommand;
 
 /** A job as the worker's screens see it. */
 export interface LocalJob {
@@ -64,6 +104,16 @@ export interface OutboxCounts {
   readonly pending: number;
   readonly failed: number;
   readonly conflicts: number;
+}
+
+/** Where a photo is in its journey to the server, for the evidence gallery. */
+export type EvidenceUploadState = 'pending' | 'uploading' | 'uploaded' | 'failed';
+
+export interface LocalEvidenceFile {
+  readonly evidenceId: string;
+  /** The on-device copy (preview without network, and the upload source). */
+  readonly fileUri: string;
+  readonly state: EvidenceUploadState;
 }
 
 /** Why a local command was refused before anything was written. */

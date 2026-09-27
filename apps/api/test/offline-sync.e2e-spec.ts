@@ -134,7 +134,7 @@ describe('Offline sync (e2e)', () => {
         checklist: [{ label: 'Clean filters' }],
         fieldNotes: [],
         history: [{ type: 'CREATED' }, { type: 'ASSIGNED' }],
-        allowedActions: ['start', 'note'],
+        allowedActions: ['start', 'note', 'evidence', 'message'],
       });
     });
 
@@ -536,7 +536,7 @@ describe('Offline sync (e2e)', () => {
       id: job.id,
       status: 'COMPLETED',
       fieldNotes: [{ id: fieldNote.id }],
-      allowedActions: ['note'],
+      allowedActions: ['note', 'evidence', 'message'],
     });
   });
 });

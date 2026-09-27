@@ -41,6 +41,41 @@ export const JobErrors = {
       ErrorCode.IDEMPOTENCY_KEY_REUSED,
       'This request ID was already used for a different request.',
     ),
+  evidenceNotFound: () =>
+    new AppException(
+      HttpStatus.NOT_FOUND,
+      ErrorCode.NOT_FOUND,
+      'Evidence not found.',
+    ),
+  fileMissing: () =>
+    new AppException(
+      HttpStatus.BAD_REQUEST,
+      ErrorCode.VALIDATION_ERROR,
+      'Some fields are missing or invalid.',
+      [{ field: 'file', message: 'Attach the photo as the "file" part.' }],
+    ),
+  fileTooLarge: (maxBytes: number) =>
+    new AppException(
+      HttpStatus.PAYLOAD_TOO_LARGE,
+      ErrorCode.PAYLOAD_TOO_LARGE,
+      `The file is larger than ${Math.floor(maxBytes / 1_048_576)} MB.`,
+    ),
+  unsupportedFile: (reason: 'unsupported' | 'malformed' | 'dimensions') =>
+    new AppException(
+      HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+      ErrorCode.UNSUPPORTED_FILE_TYPE,
+      reason === 'unsupported'
+        ? 'Only JPEG and PNG photos can be attached.'
+        : reason === 'malformed'
+          ? 'The photo file is damaged or incomplete.'
+          : 'The photo is too large in pixels.',
+    ),
+  evidenceLimitReached: (limit: number) =>
+    new AppException(
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      ErrorCode.EVIDENCE_LIMIT_REACHED,
+      `A job can have at most ${limit} photos.`,
+    ),
   versionConflict: () =>
     new AppException(
       HttpStatus.CONFLICT,

@@ -25,6 +25,8 @@ export const JobAction = {
   CANCEL: 'cancel',
   DELETE: 'delete',
   NOTE: 'note',
+  EVIDENCE: 'evidence',
+  MESSAGE: 'message',
 } as const;
 
 export type JobAction = (typeof JobAction)[keyof typeof JobAction];

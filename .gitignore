@@ -46,6 +46,13 @@ yarn-error.log*
 !**/debug.keystore
 keystore.properties
 google-services.json
+# Firebase service-account keys (server push credentials)
+firebase-service-account*.json
+*-firebase-adminsdk-*.json
+
+# Local object storage for job evidence (API) and its E2E test copy
+apps/api/storage/
+apps/api/test-storage/
 
 # Android / Gradle
 .gradle/

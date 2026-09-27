@@ -43,6 +43,10 @@ const job: JobDetail = {
   cancelledAt: null,
   history: [],
   fieldNotes: [],
+  startLocation: null,
+  completeLocation: null,
+  evidence: [],
+  messages: [],
 };
 
 describe('emptyJobForm', () => {

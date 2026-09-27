@@ -65,6 +65,16 @@ describe('isPermitted', () => {
     const assigned = job(JobStatus.ASSIGNED);
     expect(isPermitted(manager, assigned, JobAction.START)).toBe(false);
     expect(isPermitted(admin, assigned, JobAction.COMPLETE)).toBe(false);
+    expect(isPermitted(manager, assigned, JobAction.EVIDENCE)).toBe(false);
+  });
+
+  it('lets the assigned worker and managers message on a job, but no other worker', () => {
+    const assigned = job(JobStatus.ASSIGNED, 'worker-a');
+    expect(isPermitted(workerA, assigned, JobAction.MESSAGE)).toBe(true);
+    expect(isPermitted(manager, assigned, JobAction.MESSAGE)).toBe(true);
+    expect(isPermitted(admin, assigned, JobAction.MESSAGE)).toBe(true);
+    expect(isPermitted(workerB, assigned, JobAction.MESSAGE)).toBe(false);
+    expect(isPermitted(workerB, assigned, JobAction.EVIDENCE)).toBe(false);
   });
 
   it('never lets workers manage jobs, not even their own', () => {
@@ -82,11 +92,11 @@ describe('isPermitted', () => {
 
 describe('allowedActions', () => {
   it.each([
-    [JobStatus.ASSIGNED, ['start', 'note']],
-    [JobStatus.IN_PROGRESS, ['complete', 'note']],
-    // Field notes stay possible on closed jobs; nothing else does.
-    [JobStatus.COMPLETED, ['note']],
-    [JobStatus.CANCELLED, ['note']],
+    [JobStatus.ASSIGNED, ['start', 'note', 'evidence', 'message']],
+    [JobStatus.IN_PROGRESS, ['complete', 'note', 'evidence', 'message']],
+    // Notes, photos and messages stay possible on closed jobs; nothing else does.
+    [JobStatus.COMPLETED, ['note', 'evidence', 'message']],
+    [JobStatus.CANCELLED, ['note', 'evidence', 'message']],
   ] as const)(
     'offers the assigned worker on a %s job: %j',
     (status, actions) => {
@@ -101,11 +111,11 @@ describe('allowedActions', () => {
   });
 
   it.each([
-    [JobStatus.PENDING, null, ['assign', 'edit', 'cancel', 'delete']],
-    [JobStatus.ASSIGNED, 'worker-a', ['assign', 'edit', 'cancel']],
-    [JobStatus.IN_PROGRESS, 'worker-a', ['edit', 'cancel']],
-    [JobStatus.COMPLETED, 'worker-a', []],
-    [JobStatus.CANCELLED, null, []],
+    [JobStatus.PENDING, null, ['message', 'assign', 'edit', 'cancel', 'delete']],
+    [JobStatus.ASSIGNED, 'worker-a', ['message', 'assign', 'edit', 'cancel']],
+    [JobStatus.IN_PROGRESS, 'worker-a', ['message', 'edit', 'cancel']],
+    [JobStatus.COMPLETED, 'worker-a', ['message']],
+    [JobStatus.CANCELLED, null, ['message']],
   ] as const)(
     'offers managers and admins on a %s job: %j',
     (status, assignee, actions) => {

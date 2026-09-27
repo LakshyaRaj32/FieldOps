@@ -46,6 +46,9 @@ Worker screens ──read──▶ LocalJobStore (SQLite) ◀──write── l
 | Start job | ✅ | outbox `job.start`; local view `IN_PROGRESS`, `startedAt` = device time | `POST /jobs/:id/start` | Retried (see below); stays `IN_PROGRESS` locally | Job cancelled or reassigned: server wins, entry `conflict`, local view shows the server state |
 | Complete job | ✅ | outbox `job.complete`; local view `COMPLETED` | `POST /jobs/:id/complete` | Same | Same (for example cancelled while the worker was offline: stays `CANCELLED`) |
 | Add field note | ✅ | outbox `job.note.add` with a device-generated note ID; note shown at once | `POST /jobs/:id/notes` | Same | Notes are append-only and accepted on a job in any status: they only fail if the job is no longer the worker's |
+| Start / complete with a position (Phase 4) | ✅ | the fix in the entry's payload; local view shows it with the phone's distance estimate | body `{ location }` | Same; the fix is kept | Same; a replay keeps the first fix |
+| Attach a photo (Phase 4) | ✅ | outbox `job.evidence.add` + `evidence_files` row; photo shown "Waiting to upload" | `POST /jobs/:id/evidence` (multipart, 120 s timeout) | Same backoff; offline not counted; a missing local file fails for good | Append-only; `413`/`415`/`422` are failures (shown, never retried) |
+| Send a job message (Phase 4) | ✅ | outbox `job.message.send`; message shown "waiting to send" | `POST /jobs/:id/messages` | Same | Append-only, like notes |
 | Assign, edit, cancel, delete (managers) | ❌ | — | online only | Error shown | Optimistic concurrency (`409 VERSION_CONFLICT`) |
 
 A local command is validated against the local view with the shared state machine first
@@ -74,8 +77,10 @@ PULL             GET /jobs/working-set → every job replaced as server copy, pe
   (backoff), the job's later entries wait too; other jobs continue. Processing is sequential.
 - **Single flight.** One cycle at a time; requests during a cycle coalesce into one more.
 - **Triggers.** Database opened (sign-in, app start, also offline), app foreground,
-  connectivity regained, every local command, pull-to-refresh, "Sync now" (Profile), and the
-  engine's own retry timer. Connectivity is only a hint: the outcome of the request decides.
+  connectivity regained, every local command, pull-to-refresh, "Sync now" (Profile), the
+  engine's own retry timer, and since Phase 4 every realtime event, every realtime
+  (re)connection and every push received in the foreground ([realtime.md](realtime.md)).
+  Messages and evidence metadata arrive with the working set; there is no separate channel. Connectivity is only a hint: the outcome of the request decides.
 - **Restart.** The outbox lives in SQLite. On every cycle, `in_flight` entries (an attempt
   whose outcome the app never saw) go back to `pending`; resending is safe because of the
   server's idempotency.

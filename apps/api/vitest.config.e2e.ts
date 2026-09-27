@@ -1,8 +1,7 @@
-import { fileURLToPath } from 'node:url';
-
 import { defineConfig } from 'vitest/config';
 
 import { TEST_ENV } from './test/test-env.js';
+import { sharedSourceAliases } from './vitest.config.js';
 
 /**
  * End-to-end tests: the real Nest application over HTTP (supertest) against a real
@@ -10,16 +9,7 @@ import { TEST_ENV } from './test/test-env.js';
  */
 export default defineConfig({
   // Tests run the shared package's TypeScript source; only the built API loads its dist/.
-  resolve: {
-    alias: {
-      '@fieldops/shared': fileURLToPath(
-        new URL(
-          '../../packages/shared/src/job-state-machine.ts',
-          import.meta.url,
-        ),
-      ),
-    },
-  },
+  resolve: { alias: sharedSourceAliases },
   test: {
     globals: true,
     root: './',

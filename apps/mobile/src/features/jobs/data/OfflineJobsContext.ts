@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 
 import type { LocalJobStore } from './localJobStore';
 import type { JobSyncEngine, SyncStatus } from './syncEngine';
-import type { LocalJob, OutboxEntry } from './types';
+import type { LocalEvidenceFile, LocalJob, OutboxEntry } from './types';
 
 export interface OfflineJobs {
   readonly store: LocalJobStore;
@@ -91,5 +91,23 @@ export function useProblemEntries(jobId?: string): LocalQuery<OutboxEntry[]> {
   return useLocalQuery(
     store => store.problemEntries(jobId),
     `problems:${jobId ?? '*'}`,
+  );
+}
+
+/** The job's photos stored on this phone, with their upload state. */
+export function useLocalEvidenceFiles(
+  jobId: string,
+): LocalQuery<LocalEvidenceFile[]> {
+  return useLocalQuery(
+    store => store.evidenceFiles(jobId),
+    `evidence:${jobId}`,
+  );
+}
+
+/** The job's commands not yet confirmed by the server (to mark messages as unsent). */
+export function useActiveEntries(jobId: string): LocalQuery<OutboxEntry[]> {
+  return useLocalQuery(
+    store => store.activeEntries(jobId),
+    `active:${jobId}`,
   );
 }

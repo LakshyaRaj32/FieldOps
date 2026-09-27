@@ -309,6 +309,23 @@ Needs a manager and a worker account (grant the role with
    manager. Reconnect: the phone shows *Cancelled* and "“Start job” on … was not applied: the
    job changed while you were offline." Dismiss it.
 
+## Field operations on the phone (Phase 4)
+
+**Push setup (optional).** Push needs a Firebase project: put its `google-services.json` in
+`apps/mobile/android/app/` (gitignored) and rebuild; set `FCM_SERVICE_ACCOUNT_FILE` for the
+API ([notifications.md](notifications.md#setup-push)). Without the file the build prints
+"building without push notifications" and Profile › Live updates shows "Not available in this
+build"; everything else works.
+
+**Native code.** The Kotlin modules are generated from `src/services/native/*.ts` by React
+Native codegen during the Gradle build (`codegenConfig` in `package.json`). After changing a
+spec, rebuild the app (Metro reload is not enough).
+
+**Demo.** The full checklist is in [phase-status.md](phase-status.md#phase-4-device-verification):
+assignment notification → location permission and distance → start with position → messages
+→ offline photos, messages and completion → force close → reconnect → exactly-once upload,
+realtime reconnection and the manager's completion notification.
+
 ## Troubleshooting
 
 | Problem | Fix |

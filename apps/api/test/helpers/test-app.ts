@@ -6,38 +6,102 @@ import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/app.setup.js';
 import { APP_CONFIG, type AppConfig } from '../../src/config/app-config.js';
 import { PrismaService } from '../../src/database/prisma.service.js';
+import {
+  PUSH_SENDER,
+  type PushMessage,
+  type PushResult,
+  type PushSender,
+} from '../../src/notifications/push/push-sender.js';
+
+/**
+ * Stands in for FCM (an external service is the one thing E2E tests fake). Records every
+ * push and answers `invalid_token` for tokens listed in `invalidTokens`.
+ */
+export class RecordingPushSender implements PushSender {
+  readonly sent: { token: string; message: PushMessage }[] = [];
+  readonly invalidTokens = new Set<string>();
+
+  send(token: string, message: PushMessage): Promise<PushResult> {
+    if (this.invalidTokens.has(token)) {
+      return Promise.resolve('invalid_token');
+    }
+    this.sent.push({ token, message });
+    return Promise.resolve('sent');
+  }
+
+  reset(): void {
+    this.sent.length = 0;
+    this.invalidTokens.clear();
+  }
+}
 
 export interface TestApp {
   readonly app: INestApplication;
   readonly prisma: PrismaService;
   readonly config: AppConfig;
+  readonly push: RecordingPushSender;
   readonly http: () => ReturnType<typeof request>;
+  /** Set when created with `listen: true` (WebSocket tests need a real port). */
+  readonly url: string | undefined;
 }
 
 /** Boots the real application (same HTTP pipeline as main.ts) against the test database. */
-export async function createTestApp(): Promise<TestApp> {
+export async function createTestApp(
+  options: { readonly listen?: boolean } = {},
+): Promise<TestApp> {
+  const push = new RecordingPushSender();
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule],
-  }).compile();
+  })
+    .overrideProvider(PUSH_SENDER)
+    .useValue(push)
+    .compile();
 
   const app = moduleRef.createNestApplication({
     logger: ['error', 'warn'],
   });
   const config = app.get<AppConfig>(APP_CONFIG);
   configureApp(app, config);
-  await app.init();
+  let url: string | undefined;
+  if (options.listen === true) {
+    await app.listen(0, '127.0.0.1');
+    url = await app.getUrl();
+  } else {
+    await app.init();
+  }
 
   return {
     app,
     prisma: app.get(PrismaService),
     config,
+    push,
     http: () => request(app.getHttpServer()),
+    url,
   };
 }
 
 /** Empties every table between tests. */
 export async function resetDatabase(prisma: PrismaService): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE processed_mutations, job_notes, job_events, job_checklist_items, jobs, sessions, users CASCADE',
+    'TRUNCATE TABLE notifications, push_devices, job_messages, job_evidence, processed_mutations, job_notes, job_events, job_checklist_items, jobs, sessions, users CASCADE',
   );
+}
+
+/** Waits until `check` passes (event handlers run after the response is sent). */
+export async function eventually(
+  check: () => Promise<void> | void,
+  timeoutMs = 3_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      await check();
+      return;
+    } catch (error) {
+      if (Date.now() > deadline) {
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
 }

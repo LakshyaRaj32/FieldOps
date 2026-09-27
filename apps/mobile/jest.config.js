@@ -6,6 +6,7 @@ module.exports = {
   // the TypeScript source.
   moduleNameMapper: {
     '^@fieldops/shared$': '<rootDir>/../../packages/shared/src/job-state-machine.ts',
+    '^@fieldops/shared/geo$': '<rootDir>/../../packages/shared/src/geo.ts',
   },
   testPathIgnorePatterns: ['/node_modules/', '<rootDir>/android/'],
   // Packages resolved through their "react-native" export condition ship ES modules and must

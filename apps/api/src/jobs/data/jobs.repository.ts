@@ -5,8 +5,12 @@ import {
   Prisma,
   type ProcessedMutation,
 } from '../../generated/prisma/client.js';
+import type { EventLocation } from '../domain/job-location.js';
 import type { JobEventType, JobStatus } from '../job-enums.js';
 import type { JobCursor } from './job-cursor.js';
+
+/** Messages included in a job's details and in the working set. */
+export const MESSAGES_IN_DETAIL = 100;
 
 const userSummary = {
   select: { id: true, firstName: true, lastName: true },
@@ -28,6 +32,16 @@ const detailInclude = {
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     include: { author: userSummary },
   },
+  evidence: {
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    include: { uploadedBy: userSummary },
+  },
+  // The latest messages only, newest first (the DTO shows them oldest first).
+  messages: {
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: MESSAGES_IN_DETAIL,
+    include: { author: userSummary },
+  },
 } as const satisfies Prisma.JobInclude;
 
 export type JobSummaryRecord = Prisma.JobGetPayload<{
@@ -46,12 +60,16 @@ export interface JobListFilter {
   readonly limit: number;
 }
 
+/** Where the worker was, as recorded on a STARTED or COMPLETED history entry. */
+export type EventLocationInput = EventLocation;
+
 export interface JobEventInput {
   readonly type: JobEventType;
   readonly fromStatus: JobStatus | null;
   readonly toStatus: JobStatus;
   readonly actorId: string;
   readonly assigneeId?: string;
+  readonly location?: EventLocationInput;
 }
 
 export type JobFieldChanges = Omit<
@@ -60,7 +78,12 @@ export type JobFieldChanges = Omit<
 >;
 
 /** Commands a device may send with an Idempotency-Key. */
-export type JobOperation = 'job.start' | 'job.complete' | 'job.note.add';
+export type JobOperation =
+  | 'job.start'
+  | 'job.complete'
+  | 'job.note.add'
+  | 'job.evidence.add'
+  | 'job.message.send';
 
 /** What is recorded about a processed command, in the command's own transaction. */
 export interface MutationRecord {
@@ -88,6 +111,43 @@ export class NoteIdTakenError extends Error {
   override readonly name = 'NoteIdTakenError';
 }
 
+/** Evidence or a message with this (device-generated) ID already exists. */
+export class ChildIdTakenError extends Error {
+  override readonly name = 'ChildIdTakenError';
+}
+
+/** The job already has the maximum number of evidence files. */
+export class EvidenceLimitError extends Error {
+  override readonly name = 'EvidenceLimitError';
+}
+
+export interface EvidenceInput {
+  readonly id: string;
+  readonly uploadedById: string;
+  readonly contentType: string;
+  readonly sizeBytes: number;
+  readonly width: number;
+  readonly height: number;
+  readonly sha256: string;
+  readonly storageKey: string;
+  readonly capturedAt: Date;
+}
+
+export interface MessageInput {
+  readonly id: string;
+  readonly authorId: string;
+  readonly body: string;
+  readonly occurredAt: Date;
+}
+
+export interface EvidenceRecord {
+  readonly id: string;
+  readonly jobId: string;
+  readonly uploadedById: string;
+  readonly contentType: string;
+  readonly storageKey: string;
+}
+
 /** Internal: aborts a transaction whose compare-and-set lost the race. */
 class StaleVersion extends Error {}
 
@@ -98,8 +158,8 @@ const isUniqueViolation = (error: unknown): boolean =>
 type Tx = Prisma.TransactionClient;
 
 /**
- * Owns the `jobs`, `job_checklist_items`, `job_events`, `job_notes` and `processed_mutations`
- * tables: the only code in the API that queries them (docs/backend-architecture.md, "Inside a
+ * Owns the `jobs`, `job_checklist_items`, `job_events`, `job_notes`, `job_evidence`,
+ * `job_messages` and `processed_mutations` tables: the only code in the API that queries them (docs/backend-architecture.md, "Inside a
  * module").
  *
  * Every change is a compare-and-set on `version`: the UPDATE only matches the row version the
@@ -239,7 +299,10 @@ export class JobsRepository {
           });
         }
         if (changes.event !== undefined) {
-          await tx.jobEvent.create({ data: { ...changes.event, jobId: id } });
+          const { location, ...event } = changes.event;
+          await tx.jobEvent.create({
+            data: { ...event, ...location, jobId: id },
+          });
         }
       });
     } catch (error) {
@@ -278,6 +341,83 @@ export class JobsRepository {
       }
     });
     return this.findDetailOrThrow(jobId);
+  }
+
+  /**
+   * Adds a photo's metadata (and the command's idempotency record) in one transaction, if the
+   * job is below `limit` photos. Like notes, evidence does not change the job's `version`.
+   * The bytes are already in object storage under `evidence.storageKey`.
+   *
+   * @throws DuplicateMutationError when a concurrent request recorded the same key first.
+   * @throws ChildIdTakenError when evidence with this ID already exists.
+   * @throws EvidenceLimitError when the job already has `limit` photos.
+   */
+  async addEvidence(
+    jobId: string,
+    evidence: EvidenceInput,
+    limit: number,
+    mutation?: MutationRecord,
+  ): Promise<JobDetailRecord> {
+    await this.prisma.$transaction(async tx => {
+      if (mutation !== undefined) {
+        await insertMutation(tx, mutation);
+      }
+      // Two uploads racing past the limit by one is acceptable; the check is a guard against
+      // abuse, not an invariant.
+      if ((await tx.jobEvidence.count({ where: { jobId } })) >= limit) {
+        throw new EvidenceLimitError();
+      }
+      try {
+        await tx.jobEvidence.create({ data: { ...evidence, jobId } });
+      } catch (error) {
+        throw isUniqueViolation(error) ? new ChildIdTakenError() : error;
+      }
+    });
+    return this.findDetailOrThrow(jobId);
+  }
+
+  findEvidence(id: string): Promise<EvidenceRecord | null> {
+    return this.prisma.jobEvidence.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        jobId: true,
+        uploadedById: true,
+        contentType: true,
+        storageKey: true,
+      },
+    });
+  }
+
+  /**
+   * Appends a message (and the command's idempotency record) in one transaction.
+   *
+   * @throws DuplicateMutationError when a concurrent request recorded the same key first.
+   * @throws ChildIdTakenError when a message with this ID already exists.
+   */
+  async addMessage(
+    jobId: string,
+    message: MessageInput,
+    mutation?: MutationRecord,
+  ): Promise<JobDetailRecord> {
+    await this.prisma.$transaction(async tx => {
+      if (mutation !== undefined) {
+        await insertMutation(tx, mutation);
+      }
+      try {
+        await tx.jobMessage.create({ data: { ...message, jobId } });
+      } catch (error) {
+        throw isUniqueViolation(error) ? new ChildIdTakenError() : error;
+      }
+    });
+    return this.findDetailOrThrow(jobId);
+  }
+
+  findMessage(id: string): Promise<{ jobId: string; authorId: string } | null> {
+    return this.prisma.jobMessage.findUnique({
+      where: { id },
+      select: { jobId: true, authorId: true },
+    });
   }
 
   findNote(id: string): Promise<{ jobId: string; authorId: string } | null> {

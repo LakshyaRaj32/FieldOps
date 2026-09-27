@@ -1,21 +1,36 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+
+import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 
 import { AppException, AuthErrors } from '../common/errors/app-exception.js';
 import { ErrorCode } from '../common/errors/error-codes.js';
 import type { AuthenticatedUser } from '../common/types/authenticated-user.js';
 import { Role } from '../users/role.js';
+import {
+  DomainEvents,
+  type JobChangeKind,
+} from '../events/domain-events.js';
+import {
+  OBJECT_STORAGE,
+  type ObjectStorage,
+} from '../storage/object-storage.js';
 import { UsersService } from '../users/users.service.js';
 import { decodeJobCursor, encodeJobCursor } from './data/job-cursor.js';
 import {
+  ChildIdTakenError,
   DuplicateMutationError,
+  EvidenceLimitError,
   JobsRepository,
   NoteIdTakenError,
+  type EventLocationInput,
   type JobDetailRecord,
   type JobEventInput,
   type JobFieldChanges,
   type JobOperation,
   type MutationRecord,
 } from './data/jobs.repository.js';
+import { inspectImage } from './domain/evidence-image.js';
+import { eventLocation } from './domain/job-location.js';
 import type { ProcessedMutation } from '../generated/prisma/client.js';
 import {
   decideTransition,
@@ -30,7 +45,12 @@ import {
   isPermitted,
   type JobPermission,
 } from './domain/job.policy.js';
-import type { AddJobNoteDto } from './dto/job-command.dto.js';
+import type {
+  AddJobEvidenceDto,
+  AddJobNoteDto,
+  SendJobMessageDto,
+} from './dto/job-command.dto.js';
+import type { DeviceLocationDto } from './dto/job-fields.js';
 import type { CreateJobDto } from './dto/create-job.dto.js';
 import type { ListJobsQueryDto } from './dto/list-jobs-query.dto.js';
 import {
@@ -68,6 +88,34 @@ interface TransitionPlan {
   readonly eventType: JobEventType;
   readonly fields: JobFieldChanges;
   readonly assigneeId?: string;
+  /** Where the worker was (start and complete, when the phone sent a fix). */
+  readonly location?: EventLocationInput;
+}
+
+/** What a transition is called in job.changed events. */
+const TRANSITION_CHANGES: Readonly<Record<JobTransition, JobChangeKind>> = {
+  assign: 'assigned',
+  start: 'started',
+  complete: 'completed',
+  cancel: 'cancelled',
+};
+
+/** Largest accepted evidence file (the app resizes photos to about 1920 px first). */
+export const EVIDENCE_MAX_BYTES = 10 * 1_048_576;
+/** Photos per job: generous for field work, and a bound on storage abuse. */
+export const EVIDENCE_PER_JOB = 50;
+
+/** A file from a multipart upload (the parts of multer's file object this module uses). */
+export interface UploadedEvidenceFile {
+  readonly buffer: Buffer;
+  readonly size: number;
+}
+
+/** An evidence file ready to be sent to the client. */
+export interface EvidenceContent {
+  readonly data: Buffer;
+  readonly contentType: string;
+  readonly fileName: string;
 }
 
 /**
@@ -83,9 +131,13 @@ interface TransitionPlan {
  */
 @Injectable()
 export class JobsService {
+  private readonly logger = new Logger(JobsService.name);
+
   constructor(
     private readonly jobs: JobsRepository,
     private readonly users: UsersService,
+    private readonly events: DomainEvents,
+    @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
   ) {}
 
   async create(
@@ -221,6 +273,7 @@ export class JobsService {
     if (updated === null) {
       throw JobErrors.versionConflict();
     }
+    this.publishChange(updated, 'updated', user.userId);
     return JobDetailDto.from(updated, user);
   }
 
@@ -262,11 +315,15 @@ export class JobsService {
     });
   }
 
-  /** The assigned worker starts the job. Retries with the same idempotency key are replays. */
+  /**
+   * The assigned worker starts the job, optionally reporting where they are. Retries with the
+   * same idempotency key are replays.
+   */
   start(
     user: AuthenticatedUser,
     id: string,
     idempotencyKey?: string,
+    location?: DeviceLocationDto,
   ): Promise<JobDetailDto> {
     return this.idempotent(
       user,
@@ -276,9 +333,10 @@ export class JobsService {
       200,
       mutation =>
         this.transition(user, id, 'start', {
-          prepare: async () => ({
+          prepare: async job => ({
             eventType: JobEventType.STARTED,
             fields: { startedAt: new Date() },
+            ...withLocation(job, location),
           }),
           ...(mutation !== undefined && { mutation }),
         }),
@@ -290,6 +348,7 @@ export class JobsService {
     user: AuthenticatedUser,
     id: string,
     idempotencyKey?: string,
+    location?: DeviceLocationDto,
   ): Promise<JobDetailDto> {
     return this.idempotent(
       user,
@@ -299,9 +358,10 @@ export class JobsService {
       200,
       mutation =>
         this.transition(user, id, 'complete', {
-          prepare: async () => ({
+          prepare: async job => ({
             eventType: JobEventType.COMPLETED,
             fields: { completedAt: new Date() },
+            ...withLocation(job, location),
           }),
           ...(mutation !== undefined && { mutation }),
         }),
@@ -339,6 +399,7 @@ export class JobsService {
             },
             mutation,
           );
+          this.publishChange(updated, 'note', user.userId);
           return JobDetailDto.from(updated, user);
         } catch (error) {
           if (!(error instanceof NoteIdTakenError)) {
@@ -353,6 +414,201 @@ export class JobsService {
         }
       },
     );
+  }
+
+  /**
+   * The assigned worker attaches a photo, on a job in any status (like notes). The file is
+   * checked from its bytes (JPEG or PNG only, bounded dimensions), stripped of metadata,
+   * stored in object storage, and only then recorded. The evidence ID comes from the device:
+   * uploading the same evidence again is a replay, not a second photo.
+   *
+   * Storage and database cannot share a transaction: the object is written first, and removed
+   * again if the metadata could not be recorded, so a failed upload leaves nothing behind
+   * (except after a process crash between the two, see docs/evidence.md).
+   */
+  addEvidence(
+    user: AuthenticatedUser,
+    id: string,
+    dto: AddJobEvidenceDto,
+    file: UploadedEvidenceFile | undefined,
+    idempotencyKey?: string,
+  ): Promise<JobDetailDto> {
+    return this.idempotent(
+      user,
+      idempotencyKey,
+      'job.evidence.add',
+      id,
+      201,
+      async mutation => {
+        const job = await this.loadVisible(user, id);
+        this.assertPermitted(user, job, JobAction.EVIDENCE);
+        const evidenceId = dto.id.toLowerCase();
+
+        const existing = await this.jobs.findEvidence(evidenceId);
+        if (existing !== null) {
+          if (existing.jobId === id && existing.uploadedById === user.userId) {
+            return JobDetailDto.from(job, user);
+          }
+          throw JobErrors.idempotencyKeyReused();
+        }
+
+        if (file === undefined) {
+          throw JobErrors.fileMissing();
+        }
+        if (file.size > EVIDENCE_MAX_BYTES) {
+          throw JobErrors.fileTooLarge(EVIDENCE_MAX_BYTES);
+        }
+        const inspection = inspectImage(file.buffer);
+        if (!inspection.ok) {
+          throw JobErrors.unsupportedFile(inspection.reason);
+        }
+        const { image } = inspection;
+        const storageKey = `evidence/${id}/${evidenceId}.${image.extension}`;
+        await this.storage.put(storageKey, image.data, image.contentType);
+
+        try {
+          const updated = await this.jobs.addEvidence(
+            id,
+            {
+              id: evidenceId,
+              uploadedById: user.userId,
+              contentType: image.contentType,
+              sizeBytes: image.data.length,
+              width: image.width,
+              height: image.height,
+              sha256: createHash('sha256').update(image.data).digest('hex'),
+              storageKey,
+              capturedAt: new Date(dto.capturedAt),
+            },
+            EVIDENCE_PER_JOB,
+            mutation,
+          );
+          this.publishChange(updated, 'evidence', user.userId);
+          return JobDetailDto.from(updated, user);
+        } catch (error) {
+          await this.releaseUnrecordedObject(evidenceId, storageKey);
+          if (error instanceof EvidenceLimitError) {
+            throw JobErrors.evidenceLimitReached(EVIDENCE_PER_JOB);
+          }
+          if (error instanceof ChildIdTakenError) {
+            // The same upload sent twice at once: the other request recorded it.
+            const winner = await this.jobs.findEvidence(evidenceId);
+            if (winner?.jobId === id && winner.uploadedById === user.userId) {
+              return JobDetailDto.from(await this.loadVisible(user, id), user);
+            }
+            throw JobErrors.idempotencyKeyReused();
+          }
+          throw error;
+        }
+      },
+    );
+  }
+
+  /**
+   * The bytes of one photo, for anyone who may see the job (its worker, managers). Evidence
+   * of another job, or of a job the caller may not see, is not found.
+   */
+  async evidenceContent(
+    user: AuthenticatedUser,
+    jobId: string,
+    evidenceId: string,
+  ): Promise<EvidenceContent> {
+    const job = await this.loadVisible(user, jobId);
+    const evidence = await this.jobs.findEvidence(evidenceId.toLowerCase());
+    if (evidence === null || evidence.jobId !== job.id) {
+      throw JobErrors.evidenceNotFound();
+    }
+    const data = await this.storage.get(evidence.storageKey);
+    if (data === null) {
+      this.logger.warn(
+        `Evidence object missing from storage (evidenceId=${evidence.id})`,
+      );
+      throw JobErrors.evidenceNotFound();
+    }
+    const extension = evidence.contentType === 'image/png' ? 'png' : 'jpg';
+    return {
+      data,
+      contentType: evidence.contentType,
+      fileName: `${evidence.id}.${extension}`,
+    };
+  }
+
+  /**
+   * A message on the job, from its assigned worker or a manager. Append-only; the message ID
+   * comes from the sending device, so sending it again is a replay.
+   */
+  sendMessage(
+    user: AuthenticatedUser,
+    id: string,
+    dto: SendJobMessageDto,
+    idempotencyKey?: string,
+  ): Promise<JobDetailDto> {
+    return this.idempotent(
+      user,
+      idempotencyKey,
+      'job.message.send',
+      id,
+      201,
+      async mutation => {
+        const job = await this.loadVisible(user, id);
+        this.assertPermitted(user, job, JobAction.MESSAGE);
+        const messageId = dto.id.toLowerCase();
+        try {
+          const updated = await this.jobs.addMessage(
+            id,
+            {
+              id: messageId,
+              authorId: user.userId,
+              body: dto.body,
+              occurredAt: new Date(dto.occurredAt),
+            },
+            mutation,
+          );
+          this.events.publish({
+            type: 'job.message.created',
+            jobId: updated.id,
+            jobTitle: updated.title,
+            messageId,
+            authorId: user.userId,
+            authorRole: user.role,
+            createdById: updated.createdById,
+            assignedWorkerId: updated.assignedWorkerId,
+          });
+          return JobDetailDto.from(updated, user);
+        } catch (error) {
+          if (!(error instanceof ChildIdTakenError)) {
+            throw error;
+          }
+          const existing = await this.jobs.findMessage(messageId);
+          if (existing?.jobId === id && existing.authorId === user.userId) {
+            return JobDetailDto.from(await this.loadVisible(user, id), user);
+          }
+          throw JobErrors.idempotencyKeyReused();
+        }
+      },
+    );
+  }
+
+  /**
+   * Removes a stored object whose metadata could not be recorded, unless a row (a concurrent
+   * identical upload) now refers to it. Best effort: a failure here is logged, not raised.
+   */
+  private async releaseUnrecordedObject(
+    evidenceId: string,
+    storageKey: string,
+  ): Promise<void> {
+    try {
+      const row = await this.jobs.findEvidence(evidenceId);
+      if (row?.storageKey !== storageKey) {
+        await this.storage.delete(storageKey);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Could not remove an unrecorded evidence object (evidenceId=${evidenceId}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   cancel(
@@ -378,7 +634,7 @@ export class JobsService {
     transition: JobTransition,
     options: {
       readonly sameAssignee?: (job: JobDetailRecord) => boolean;
-      readonly prepare: () => Promise<TransitionPlan>;
+      readonly prepare: (job: JobDetailRecord) => Promise<TransitionPlan>;
       /** Idempotency record, written in the same transaction as the change. */
       readonly mutation?: MutationRecord;
     },
@@ -409,13 +665,14 @@ export class JobsService {
       );
     }
 
-    const plan = await options.prepare();
+    const plan = await options.prepare(job);
     const event: JobEventInput = {
       type: plan.eventType,
       fromStatus: job.status,
       toStatus: decision.to,
       actorId: user.userId,
       ...(plan.assigneeId !== undefined && { assigneeId: plan.assigneeId }),
+      ...(plan.location !== undefined && { location: plan.location }),
     };
     const updated = await this.jobs.update(id, job.version, {
       fields: { ...plan.fields, status: decision.to },
@@ -425,7 +682,39 @@ export class JobsService {
     if (updated === null) {
       throw JobErrors.versionConflict();
     }
+    const previousAssignee =
+      job.assignedWorkerId !== null &&
+      job.assignedWorkerId !== updated.assignedWorkerId
+        ? job.assignedWorkerId
+        : null;
+    this.publishChange(
+      updated,
+      TRANSITION_CHANGES[transition],
+      user.userId,
+      previousAssignee,
+    );
     return JobDetailDto.from(updated, user);
+  }
+
+  /** Tells other modules (realtime, notifications) that a job changed. After the commit. */
+  private publishChange(
+    job: JobDetailRecord,
+    change: JobChangeKind,
+    actorId: string,
+    previousAssigneeId: string | null = null,
+  ): void {
+    this.events.publish({
+      type: 'job.changed',
+      jobId: job.id,
+      jobTitle: job.title,
+      change,
+      status: job.status,
+      version: job.version,
+      actorId,
+      createdById: job.createdById,
+      assignedWorkerId: job.assignedWorkerId,
+      previousAssigneeId,
+    });
   }
 
   /**
@@ -521,6 +810,14 @@ export class JobsService {
       throw AuthErrors.forbidden();
     }
   }
+}
+
+/** The plan's location part for a fix the phone may have sent. */
+function withLocation(
+  job: Pick<JobDetailRecord, 'latitude' | 'longitude'>,
+  fix: DeviceLocationDto | undefined,
+): { location?: EventLocationInput } {
+  return fix === undefined ? {} : { location: eventLocation(job, fix) };
 }
 
 /** The column changes a PATCH asks for; absent fields are left out. */

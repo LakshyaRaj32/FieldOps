@@ -1,6 +1,9 @@
 # FieldOps Architecture
 
-> Status: **target architecture; built through Phase 3 (Offline-First).** Phase 1 built the
+> Status: **target architecture; built through Phase 3 (Offline-First), Phase 4 (Field
+> Operations) code written and awaiting verification** (location, realtime, notifications,
+> evidence, messages: [location.md](location.md), [realtime.md](realtime.md),
+> [notifications.md](notifications.md), [evidence.md](evidence.md)). Phase 1 built the
 > repository, the mobile foundation, the backend and authentication; Phase 2 built jobs
 > (model, assignment, state machine, history, worker and manager screens); Phase 3 built the
 > offline path for workers (SQLite, outbox, sync engine, server idempotency, conflicts; see
@@ -116,7 +119,9 @@ Knowing where each kind of data lives, and which copy wins, prevents most offlin
 | Transient UI state (open modals, form input, filters, current screen) | **Redux** / component state | Throwaway; may be lost on app restart |
 | Small device preferences and flags | **MMKV** | Not relational, not for domain data |
 | Tokens and credentials on the device | **Android Keystore-backed secure storage** | Never in MMKV plaintext, Redux persistence or SQLite |
-| Binary media (photos, signatures, documents) | **Object storage** (server); device file system (client, until uploaded) | Postgres stores metadata and references only |
+| Binary media (photos, signatures, documents) | **Object storage** (server); device file system (client, until uploaded) | Postgres stores metadata and references only. Phase 4: local-disk implementation behind `ObjectStorage` |
+| Realtime delivery | **Nothing** (WebSocket events are hints) | Missed events are recovered by sync ([realtime.md](realtime.md)) |
+| Push delivery | **Nothing** (FCM is best effort) | The inbox (`notifications`) is the durable record ([notifications.md](notifications.md)) |
 | Cache, rate-limit counters, locks, queue state, realtime fan-out | **Redis** | Losing Redis may degrade the service but must never lose business data |
 
 ## 6. Core architectural decisions

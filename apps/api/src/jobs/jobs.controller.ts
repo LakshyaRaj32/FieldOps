@@ -3,18 +3,27 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
   Patch,
   Post,
   Query,
+  StreamableFile,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
   ApiHeader,
   ApiNoContentResponse,
+  ApiOkResponse,
   ApiOperation,
+  ApiProduces,
   ApiTags,
 } from '@nestjs/swagger';
 
@@ -32,10 +41,14 @@ import type { AuthenticatedUser } from '../common/types/authenticated-user.js';
 import { rolesWith } from './domain/job.policy.js';
 import { CreateJobDto } from './dto/create-job.dto.js';
 import {
+  AddJobEvidenceDto,
   AddJobNoteDto,
   AssignJobDto,
   CancelJobDto,
+  JobCommandDto,
+  JobEvidenceParamDto,
   JobIdParamDto,
+  SendJobMessageDto,
 } from './dto/job-command.dto.js';
 import {
   JobDetailDto,
@@ -44,7 +57,11 @@ import {
 } from './dto/job-response.dto.js';
 import { ListJobsQueryDto } from './dto/list-jobs-query.dto.js';
 import { UpdateJobDto } from './dto/update-job.dto.js';
-import { JobsService } from './jobs.service.js';
+import {
+  EVIDENCE_MAX_BYTES,
+  JobsService,
+  type UploadedEvidenceFile,
+} from './jobs.service.js';
 
 const INVALID = {
   status: HttpStatus.BAD_REQUEST,
@@ -237,19 +254,27 @@ export class JobsController {
   @ApiOperation({
     summary: 'Start an assigned job (the assigned WORKER)',
     description:
-      'ASSIGNED → IN_PROGRESS. Repeating it on an IN_PROGRESS job succeeds without changes.',
+      'ASSIGNED → IN_PROGRESS. Repeating it on an IN_PROGRESS job succeeds without changes. ' +
+      "The body may carry the phone's position fix, recorded with the history entry.",
   })
   @ApiEnvelopeResponse(JobDetailDto, {
     description: 'The job, now IN_PROGRESS.',
   })
   @IdempotencyKeyHeader()
-  @ApiErrorResponses(UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, WRONG_STATUS)
+  @ApiErrorResponses(
+    INVALID,
+    UNAUTHENTICATED,
+    FORBIDDEN,
+    NOT_FOUND,
+    WRONG_STATUS,
+  )
   start(
     @CurrentUser() user: AuthenticatedUser,
     @Param() params: JobIdParamDto,
+    @Body() dto: JobCommandDto,
     @IdempotencyKey() idempotencyKey: string | undefined,
   ): Promise<JobDetailDto> {
-    return this.jobs.start(user, params.id, idempotencyKey);
+    return this.jobs.start(user, params.id, idempotencyKey, dto.location);
   }
 
   @Post(':id/complete')
@@ -258,17 +283,25 @@ export class JobsController {
   @ApiOperation({
     summary: 'Complete an in-progress job (the assigned WORKER)',
     description:
-      'IN_PROGRESS → COMPLETED. Repeating it on a COMPLETED job succeeds without changes.',
+      'IN_PROGRESS → COMPLETED. Repeating it on a COMPLETED job succeeds without changes. ' +
+      "The body may carry the phone's position fix.",
   })
   @IdempotencyKeyHeader()
   @ApiEnvelopeResponse(JobDetailDto, { description: 'The job, now COMPLETED.' })
-  @ApiErrorResponses(UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, WRONG_STATUS)
+  @ApiErrorResponses(
+    INVALID,
+    UNAUTHENTICATED,
+    FORBIDDEN,
+    NOT_FOUND,
+    WRONG_STATUS,
+  )
   complete(
     @CurrentUser() user: AuthenticatedUser,
     @Param() params: JobIdParamDto,
+    @Body() dto: JobCommandDto,
     @IdempotencyKey() idempotencyKey: string | undefined,
   ): Promise<JobDetailDto> {
-    return this.jobs.complete(user, params.id, idempotencyKey);
+    return this.jobs.complete(user, params.id, idempotencyKey, dto.location);
   }
 
   @Post(':id/notes')
@@ -297,6 +330,123 @@ export class JobsController {
     @IdempotencyKey() idempotencyKey: string | undefined,
   ): Promise<JobDetailDto> {
     return this.jobs.addNote(user, params.id, dto, idempotencyKey);
+  }
+
+  @Post(':id/evidence')
+  @Roles(...rolesWith('job:evidence'))
+  @HttpCode(HttpStatus.CREATED)
+  @UseInterceptors(
+    // In memory: the file is inspected and rewritten before it is stored. One file, bounded.
+    FileInterceptor('file', {
+      limits: { fileSize: EVIDENCE_MAX_BYTES, files: 1, fields: 5, parts: 7 },
+    }),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['id', 'capturedAt', 'file'],
+      properties: {
+        id: { type: 'string', format: 'uuid' },
+        capturedAt: { type: 'string', format: 'date-time' },
+        file: { type: 'string', format: 'binary' },
+      },
+    },
+  })
+  @ApiOperation({
+    summary: 'Attach a photo (the assigned WORKER)',
+    description:
+      'Multipart upload of one JPEG or PNG (at most 10 MB), on a job in any status. The type ' +
+      'is detected from the bytes and metadata (EXIF, GPS) is removed. The evidence ID comes ' +
+      'from the device: uploading the same evidence again changes nothing.',
+  })
+  @IdempotencyKeyHeader()
+  @ApiEnvelopeResponse(JobDetailDto, {
+    status: HttpStatus.CREATED,
+    description: 'The job with the photo.',
+  })
+  @ApiErrorResponses(
+    INVALID,
+    UNAUTHENTICATED,
+    FORBIDDEN,
+    NOT_FOUND,
+    {
+      status: HttpStatus.PAYLOAD_TOO_LARGE,
+      description: 'PAYLOAD_TOO_LARGE: the file is over 10 MB.',
+    },
+    {
+      status: HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+      description:
+        'UNSUPPORTED_FILE_TYPE: not a JPEG or PNG, damaged, or too many pixels.',
+    },
+    {
+      status: HttpStatus.UNPROCESSABLE_ENTITY,
+      description:
+        'EVIDENCE_LIMIT_REACHED: the job has 50 photos; IDEMPOTENCY_KEY_REUSED: the ID belongs to other evidence.',
+    },
+  )
+  addEvidence(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param() params: JobIdParamDto,
+    @Body() dto: AddJobEvidenceDto,
+    @UploadedFile() file: UploadedEvidenceFile | undefined,
+    @IdempotencyKey() idempotencyKey: string | undefined,
+  ): Promise<JobDetailDto> {
+    return this.jobs.addEvidence(user, params.id, dto, file, idempotencyKey);
+  }
+
+  @Get(':id/evidence/:evidenceId/content')
+  @Header('Cache-Control', 'private, max-age=86400')
+  @ApiProduces('image/jpeg', 'image/png')
+  @ApiOperation({
+    summary: 'Download a photo (the assigned WORKER, MANAGER, ADMIN)',
+    description:
+      'The stored (metadata-free) bytes. Anyone who may see the job may see its photos.',
+  })
+  @ApiOkResponse({ description: 'The image.' })
+  @ApiErrorResponses(INVALID, UNAUTHENTICATED, NOT_FOUND)
+  async evidenceContent(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param() params: JobEvidenceParamDto,
+  ): Promise<StreamableFile> {
+    const content = await this.jobs.evidenceContent(
+      user,
+      params.id,
+      params.evidenceId,
+    );
+    return new StreamableFile(content.data, {
+      type: content.contentType,
+      length: content.data.length,
+      disposition: `inline; filename="${content.fileName}"`,
+    });
+  }
+
+  @Post(':id/messages')
+  @Roles(...rolesWith('job:message'))
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Post a message on a job (its WORKER, MANAGER, ADMIN)',
+    description:
+      'Append-only, on a job in any status. The message ID comes from the sending device: ' +
+      'sending the same message again changes nothing.',
+  })
+  @IdempotencyKeyHeader()
+  @ApiEnvelopeResponse(JobDetailDto, {
+    status: HttpStatus.CREATED,
+    description: 'The job with the message.',
+  })
+  @ApiErrorResponses(INVALID, UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    description:
+      'IDEMPOTENCY_KEY_REUSED: the key or message ID belongs to a different request.',
+  })
+  sendMessage(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param() params: JobIdParamDto,
+    @Body() dto: SendJobMessageDto,
+    @IdempotencyKey() idempotencyKey: string | undefined,
+  ): Promise<JobDetailDto> {
+    return this.jobs.sendMessage(user, params.id, dto, idempotencyKey);
   }
 
   @Post(':id/cancel')

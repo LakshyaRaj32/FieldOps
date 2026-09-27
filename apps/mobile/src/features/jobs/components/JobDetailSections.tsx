@@ -101,15 +101,7 @@ export function JobInformation({
       </AppText>
       <InfoRow label="Scheduled" value={formatSchedule(job.scheduledAt)} />
       <InfoRow label="Customer" value={job.customerName} />
-      <InfoRow label="Address" value={job.address} />
-      {job.location !== null ? (
-        <InfoRow
-          label="Coordinates"
-          value={`${job.location.latitude.toFixed(
-            5,
-          )}, ${job.location.longitude.toFixed(5)}`}
-        />
-      ) : null}
+      {/* Address and coordinates: JobSiteCard (FieldOperationSections.tsx). */}
       <InfoRow label="Priority" value={PRIORITY_LABELS[job.priority]} />
       {showAssignee ? (
         <InfoRow

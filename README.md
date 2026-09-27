@@ -177,6 +177,10 @@ Building APKs, API environments, testing and troubleshooting:
 | [database.md](docs/database.md) | Schema, indexing decisions, migrations |
 | [offline-first.md](docs/offline-first.md) | Offline capability matrix, write and read paths, local data lifecycle |
 | [synchronization.md](docs/synchronization.md) | Outbox, push/pull protocol, idempotency, conflict resolution, retry/backoff |
+| [location.md](docs/location.md) | On-demand location, the Kotlin module, permissions, distance and trust boundary, privacy |
+| [realtime.md](docs/realtime.md) | WebSocket gateway, authentication, rooms, event contract, reconnection, relationship with sync |
+| [notifications.md](docs/notifications.md) | Notification rules, inbox, FCM, device tokens, payload security, app states, setup |
+| [evidence.md](docs/evidence.md) | Photo pipeline, object storage, validation and metadata removal, offline uploads |
 | [devops.md](docs/devops.md) | Environments, containers, CI/CD, releases, observability, scaling path |
 | [ai-architecture.md](docs/ai-architecture.md) | Controlled AI tools, safety, evaluation |
 | [development.md](docs/development.md) | Local setup, workspaces, git workflow, Windows notes |

@@ -100,7 +100,9 @@ readable message, the request ID) is all present.
 | `VERSION_CONFLICT` | 409 | The job changed since the client read it: refetch and retry |
 | `INVALID_ASSIGNEE` | 422 | The worker to assign does not exist, is disabled or is not a `WORKER` |
 | `IDEMPOTENCY_KEY_REUSED` | 422 | The `Idempotency-Key` (or a device-generated note ID) was already used for a different request |
-| `PAYLOAD_TOO_LARGE` | 413 | Body over the limit (100 kB) |
+| `PAYLOAD_TOO_LARGE` | 413 | Body over the limit (100 kB JSON; 10 MB for an evidence file) |
+| `UNSUPPORTED_FILE_TYPE` | 415 | The uploaded file is not a JPEG or PNG (detected from its bytes), is damaged, or has too many pixels |
+| `EVIDENCE_LIMIT_REACHED` | 422 | The job already has 50 photos |
 | `INTERNAL_ERROR` | 500 | Unexpected failure; see server logs with the request ID |
 | `SERVICE_UNAVAILABLE` | 503 | A dependency (the database) is down; readiness probe |
 
@@ -126,6 +128,15 @@ request by the job policy (`apps/api/src/jobs/domain/job.policy.ts`).
 | `GET` | `/api/v1/users/workers` | MANAGER, ADMIN | `200` active workers to assign |
 | `GET` | `/api/v1/jobs/working-set` | WORKER | `200` `{ jobs, generatedAt }`: the offline snapshot (Phase 3) |
 | `POST` | `/api/v1/jobs/:id/notes` | the assigned WORKER | `201` the job with the note (Phase 3) |
+| `POST` | `/api/v1/jobs/:id/evidence` | the assigned WORKER | `201` the job with the photo (multipart; Phase 4, [evidence.md](evidence.md)) |
+| `GET` | `/api/v1/jobs/:id/evidence/:evidenceId/content` | everyone who may see the job | `200` the image bytes (Phase 4) |
+| `POST` | `/api/v1/jobs/:id/messages` | the assigned WORKER, MANAGER, ADMIN | `201` the job with the message (Phase 4) |
+| `GET` | `/api/v1/notifications` | everyone | `200` the caller's inbox `{ items, nextCursor, unreadCount }` (Phase 4, [notifications.md](notifications.md)) |
+| `POST` | `/api/v1/notifications/:id/read`, `/read-all` | everyone | `204` |
+| `PUT` / `DELETE` | `/api/v1/notifications/devices/current` | everyone | `204` register / remove this session's FCM token |
+
+**Realtime** (Phase 4): Socket.IO at path `/realtime` on the API origin (not under `/api/v1`),
+WebSocket transport, access token in the handshake. Contract: [realtime.md](realtime.md).
 
 **Status lifecycle.** Status never changes through `PATCH`; only the action endpoints move it,
 through the job state machine:
@@ -151,7 +162,8 @@ the caller's own jobs for workers; a worker asking for `assignedWorkerId` of som
 `403`. Role refusals (a worker assigning, a manager starting) are `403 FORBIDDEN`.
 
 **`allowedActions`.** Every job in a response lists what the caller may do with it right now
-(`start`, `complete`, `assign`, `edit`, `cancel`, `delete`), computed from the caller's role,
+(`start`, `complete`, `note`, `evidence`, `message`, `assign`, `edit`, `cancel`, `delete`),
+computed from the caller's role,
 their relationship to the job and its status. Clients show exactly these actions.
 
 **Editing.** `PATCH` takes the `version` the client read, plus any of `title`, `description`,
@@ -202,6 +214,19 @@ The device replaces its copy with it; a job missing from it is no longer the wor
   is a no-op.
 - Every `JobDetail` now contains `fieldNotes` (receipt order) and workers' `allowedActions`
   include `note`.
+
+**Phase 4 additions** (all accept `Idempotency-Key`):
+
+- `POST /jobs/:id/start` and `/complete` take an optional body `{ location: { latitude,
+  longitude, accuracyMeters, capturedAt } }`. The server records it on the history entry and
+  computes `distanceMeters` from the job site itself; `JobDetail` shows them as
+  `startLocation` / `completeLocation` ([location.md](location.md)). A retry keeps the first
+  fix.
+- `POST /jobs/:id/evidence` (multipart `id`, `capturedAt`, `file`) and
+  `POST /jobs/:id/messages` (`{ id, body, occurredAt }`) use device-generated IDs: sending the
+  same one again is a replay.
+- `JobDetail` gains `evidence` (metadata, receipt order) and `messages` (latest 100, oldest
+  first); both are part of the working set.
 
 **Conflicts.** A command whose transition the current server state does not allow is
 `409 INVALID_STATUS_TRANSITION` (the server state is kept); a job reassigned away is `404`.

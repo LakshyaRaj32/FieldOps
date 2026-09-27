@@ -130,7 +130,7 @@ describe('Jobs (e2e)', () => {
 
       const myJobs = dataOf<JobPage>(await get(workerA, '/jobs'));
       expect(myJobs.items.map(job => job.id)).toEqual([created.id]);
-      expect(myJobs.items[0]?.allowedActions).toEqual(['start', 'note']);
+      expect(myJobs.items[0]?.allowedActions).toEqual(['start', 'note', 'evidence', 'message']);
 
       const details = dataOf<JobDetail>(
         await get(workerA, `/jobs/${created.id}`),
@@ -140,14 +140,14 @@ describe('Jobs (e2e)', () => {
       const started = await post(workerA, `/jobs/${created.id}/start`);
       expect(dataOf<JobDetail>(started)).toMatchObject({
         status: 'IN_PROGRESS',
-        allowedActions: ['complete', 'note'],
+        allowedActions: ['complete', 'note', 'evidence', 'message'],
         startedAt: expect.any(String),
       });
 
       const completed = await post(workerA, `/jobs/${created.id}/complete`);
       expect(dataOf<JobDetail>(completed)).toMatchObject({
         status: 'COMPLETED',
-        allowedActions: ['note'],
+        allowedActions: ['note', 'evidence', 'message'],
         completedAt: expect.any(String),
       });
 
@@ -193,7 +193,7 @@ describe('Jobs (e2e)', () => {
           notes: 'Ask for Mr. Rao at reception.',
           createdBy: { id: manager.id, firstName: 'manager' },
           version: 1,
-          allowedActions: ['assign', 'edit', 'cancel', 'delete'],
+          allowedActions: ['message', 'assign', 'edit', 'cancel', 'delete'],
           history: [{ type: 'CREATED', fromStatus: null, toStatus: 'PENDING' }],
         },
       });
@@ -294,7 +294,7 @@ describe('Jobs (e2e)', () => {
       expect(dataOf<JobDetail>(response)).toMatchObject({
         status: 'ASSIGNED',
         assignedWorker: { id: workerA.id, firstName: 'worker-a' },
-        allowedActions: ['assign', 'edit', 'cancel'],
+        allowedActions: ['message', 'assign', 'edit', 'cancel'],
       });
     });
 
@@ -405,7 +405,7 @@ describe('Jobs (e2e)', () => {
       expect(response.status).toBe(200);
       expect(dataOf<JobDetail>(response)).toMatchObject({
         id: job.id,
-        allowedActions: ['start', 'note'],
+        allowedActions: ['start', 'note', 'evidence', 'message'],
       });
     });
 
@@ -685,13 +685,13 @@ describe('Jobs (e2e)', () => {
         status: 'CANCELLED',
         cancellationReason: 'Customer rescheduled.',
         cancelledAt: expect.any(String),
-        allowedActions: [],
+        allowedActions: ['message'],
       });
-      // The worker still sees the job, now closed: only field notes remain possible.
+      // The worker still sees the job, now closed: only notes, photos and messages remain.
       const forWorker = dataOf<JobDetail>(
         await get(workerA, `/jobs/${job.id}`),
       );
-      expect(forWorker.allowedActions).toEqual(['note']);
+      expect(forWorker.allowedActions).toEqual(['note', 'evidence', 'message']);
     });
 
     it('forbids workers from cancelling (403)', async () => {

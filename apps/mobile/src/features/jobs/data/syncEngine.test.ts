@@ -81,6 +81,8 @@ describe('JobSyncEngine', () => {
       operation: 'job.start',
       jobId: 'job-1',
       mutationId: entry.mutationId,
+      // No position was captured: the command goes without one.
+      body: {},
     });
     expect((await store.entry(entry.seq))?.status).toBe('synced');
     expect(await store.getJob('job-1')).toMatchObject({
@@ -418,5 +420,197 @@ describe('JobSyncEngine', () => {
       opened.forEach(db => db.close());
       removeDatabaseFile(file);
     }
+  });
+});
+
+describe('JobSyncEngine — field operations (Phase 4)', () => {
+  const FIX = {
+    latitude: 28.6149,
+    longitude: 77.209,
+    accuracyMeters: 8,
+    capturedAt: '2026-09-27T08:00:00.000Z',
+  };
+  const photo = (id = 'evidence-1') => ({
+    evidenceId: id,
+    fileUri: `file:///data/files/evidence/${id}.jpg`,
+    contentType: 'image/jpeg' as const,
+    sizeBytes: 90_000,
+    width: 1920,
+    height: 1080,
+  });
+
+  /** A file store standing in for app-private storage. */
+  const fakeFiles = (present: string[]) => {
+    const files = new Set(present);
+    return {
+      files,
+      remover: {
+        remove: async (uri: string) => {
+          files.delete(uri);
+        },
+      },
+    };
+  };
+
+  async function setupWithFiles(present: string[]) {
+    const context = await setup();
+    const { files, remover } = fakeFiles(present);
+    const engine = new JobSyncEngine({
+      store: context.store,
+      transport: context.server,
+      now: context.clock.now,
+      random: () => 0.5,
+      timers: context.timers,
+      files: remover,
+    });
+    await engine.sync();
+    return { ...context, engine, files };
+  }
+
+  it('sends the position captured with a start and a completion', async () => {
+    const { store, engine, server } = await downloaded(await setup());
+    await store.startJob('job-1', FIX);
+    await store.completeJob('job-1', null);
+
+    await engine.sync();
+
+    const commands = server.calls.filter(call => call.operation !== 'pull');
+    expect(commands.map(call => [call.operation, call.body])).toEqual([
+      ['job.start', { location: FIX }],
+      ['job.complete', {}],
+    ]);
+    expect(server.jobs.get('job-1')?.startLocation).toMatchObject(FIX);
+  });
+
+  it('keeps a position captured offline across a restart and sends it once', async () => {
+    const file = tempDatabasePath();
+    try {
+      const first = await downloaded(await setup([serverJob()], { file }));
+      first.server.online = false;
+      await first.store.startJob('job-1', FIX);
+      await first.engine.sync();
+      first.engine.dispose();
+      first.db.close();
+
+      const second = await setup([], { file, server: first.server });
+      second.server.online = true;
+      await second.engine.sync();
+
+      expect(second.server.effects).toBe(1);
+      expect(second.server.jobs.get('job-1')?.startLocation).toMatchObject(FIX);
+      second.db.close();
+    } finally {
+      removeDatabaseFile(file);
+    }
+  });
+
+  it('uploads a photo through the outbox and shows it as uploaded', async () => {
+    const { store, engine, server } = await downloaded(await setup());
+    await store.addEvidence('job-1', photo());
+    expect(await store.evidenceFiles('job-1')).toEqual([
+      expect.objectContaining({ evidenceId: 'evidence-1', state: 'pending' }),
+    ]);
+    expect((await store.getJob('job-1'))?.job.evidence).toHaveLength(1);
+
+    await engine.sync();
+
+    expect(operations(server)).toEqual(['job.evidence.add']);
+    expect(server.jobs.get('job-1')?.evidence.map(item => item.id)).toEqual([
+      'evidence-1',
+    ]);
+    expect(await store.evidenceFiles('job-1')).toEqual([
+      expect.objectContaining({ evidenceId: 'evidence-1', state: 'uploaded' }),
+    ]);
+    const local = await store.getJob('job-1');
+    expect(local?.pendingChanges).toBe(0);
+    expect(local?.job.evidence).toHaveLength(1);
+  });
+
+  it('keeps a photo pending while offline, and uploads it exactly once after lost responses', async () => {
+    const { store, engine, server } = await downloaded(await setup());
+    await store.addEvidence('job-1', photo());
+
+    server.online = false;
+    await engine.sync();
+    expect(await store.evidenceFiles('job-1')).toEqual([
+      expect.objectContaining({ state: 'pending' }),
+    ]);
+
+    server.online = true;
+    server.faults.push({ type: 'lostResponse' });
+    await engine.sync();
+    await engine.sync();
+
+    expect(server.effects).toBe(1);
+    expect(server.jobs.get('job-1')?.evidence).toHaveLength(1);
+    expect(await store.evidenceFiles('job-1')).toEqual([
+      expect.objectContaining({ state: 'uploaded' }),
+    ]);
+  });
+
+  it('fails an upload for good when the server refuses the file, and says so', async () => {
+    const { store, engine, server } = await downloaded(await setup());
+    await store.addEvidence('job-1', photo());
+    server.faults.push({
+      type: 'http',
+      status: 415,
+      code: 'UNSUPPORTED_FILE_TYPE',
+    });
+
+    const status = await engine.sync();
+
+    expect(status.failed).toBe(1);
+    expect(await store.evidenceFiles('job-1')).toEqual([
+      expect.objectContaining({ state: 'failed' }),
+    ]);
+    // Refused photos no longer appear on the job.
+    expect((await store.getJob('job-1'))?.job.evidence).toEqual([]);
+  });
+
+  it('deletes a photo file once its upload is dismissed', async () => {
+    const uri = photo().fileUri;
+    const { store, engine, server, files } = await setupWithFiles([uri]);
+    await store.addEvidence('job-1', photo());
+    server.faults.push({ type: 'http', status: 413, code: 'PAYLOAD_TOO_LARGE' });
+    await engine.sync();
+    const [problem] = await store.problemEntries();
+
+    await store.dismiss(problem?.seq ?? -1);
+    await engine.sync();
+
+    expect(files.has(uri)).toBe(false);
+    expect(await store.evidenceFiles('job-1')).toEqual([]);
+  });
+
+  it('keeps an uploaded photo file while the job is on the phone, then deletes it', async () => {
+    const uri = photo().fileUri;
+    const { store, engine, server, files } = await setupWithFiles([uri]);
+    await store.addEvidence('job-1', photo());
+    await engine.sync();
+    expect(files.has(uri)).toBe(true);
+
+    // The job is reassigned: it leaves the phone, and so does its photo file.
+    server.reassign('job-1', { id: 'worker-2', firstName: 'B', lastName: 'B' });
+    await engine.sync();
+
+    expect(files.has(uri)).toBe(false);
+  });
+
+  it('sends job messages written offline, in order, exactly once', async () => {
+    const { store, engine, server } = await downloaded(await setup());
+    server.online = false;
+    await store.sendMessage('job-1', 'Need a ladder');
+    await store.sendMessage('job-1', 'Found one');
+    await engine.sync();
+    expect((await store.getJob('job-1'))?.job.messages).toHaveLength(2);
+
+    server.online = true;
+    await engine.sync();
+
+    expect(server.jobs.get('job-1')?.messages.map(item => item.body)).toEqual([
+      'Need a ladder',
+      'Found one',
+    ]);
+    expect(server.effects).toBe(2);
   });
 });

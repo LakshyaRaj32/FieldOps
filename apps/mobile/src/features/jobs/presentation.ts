@@ -3,6 +3,7 @@ import {
   JobEventType,
   JobPriority,
   JobStatus,
+  type ActionLocation,
   type JobHistoryEntry,
   type JobSummary,
   type UserSummary,
@@ -11,7 +12,11 @@ import {
 import type { BadgeTone, ButtonVariant } from '../../components/ui';
 import { RETRY_POLICY } from './data/retryPolicy';
 import type { SyncStatus } from './data/syncEngine';
-import type { OutboxEntry, OutboxType } from './data/types';
+import type {
+  EvidenceUploadState,
+  OutboxEntry,
+  OutboxType,
+} from './data/types';
 
 /**
  * How jobs are shown: labels, badge tones, schedule formatting and the command buttons for
@@ -211,6 +216,9 @@ function commandFor(action: JobAction, assigned: boolean): JobCommand | null {
         },
       };
     case JobAction.NOTE:
+    case JobAction.EVIDENCE:
+    case JobAction.MESSAGE:
+      // These have their own composers, not buttons.
       return null;
   }
 }
@@ -239,6 +247,40 @@ export const OUTBOX_LABELS: Readonly<Record<OutboxType, string>> = {
   'job.start': 'Start job',
   'job.complete': 'Complete job',
   'job.note.add': 'Note',
+  'job.evidence.add': 'Photo',
+  'job.message.send': 'Message',
+};
+
+/** "35 m", "1.2 km", "18 km". */
+export function formatDistance(meters: number): string {
+  if (meters < 1000) {
+    return `${Math.round(meters)} m`;
+  }
+  const km = meters / 1000;
+  return km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
+}
+
+/**
+ * Where a job was started or completed, for example "120 m from the site (±15 m)". The
+ * accuracy is shown because a phone fix indoors can be off by more than the distance.
+ */
+export function describeActionLocation(location: ActionLocation): string {
+  const accuracy = `±${formatDistance(location.accuracyMeters)}`;
+  if (location.distanceMeters === null) {
+    return `${location.latitude.toFixed(5)}, ${location.longitude.toFixed(
+      5,
+    )} (${accuracy})`;
+  }
+  return `${formatDistance(location.distanceMeters)} from the site (${accuracy})`;
+}
+
+export const EVIDENCE_STATE_LABELS: Readonly<
+  Record<EvidenceUploadState, { label: string; tone: BadgeTone }>
+> = {
+  pending: { label: 'Waiting to upload', tone: 'neutral' },
+  uploading: { label: 'Uploading…', tone: 'primary' },
+  uploaded: { label: 'Uploaded', tone: 'success' },
+  failed: { label: 'Upload failed', tone: 'danger' },
 };
 
 const plural = (count: number, one: string, many: string) =>
