@@ -155,22 +155,22 @@ describe('describeProblem', () => {
   // Cast: the fixture mixes command types and payloads freely; only labels are under test.
   const problem = (overrides: Partial<OutboxEntry>): OutboxEntry =>
     ({
-    seq: 1,
-    mutationId: 'm-1',
-    type: 'job.start',
-    jobId: 'job-1',
-    jobTitle: 'AC repair',
-    payload: null,
-    baseVersion: 2,
-    occurredAt: '2026-09-27T09:00:00.000Z',
-    status: 'conflict',
-    attempts: 0,
-    nextAttemptAt: null,
-    lastAttemptAt: null,
-    lastError: { code: 'INVALID_STATUS_TRANSITION', message: 'x' },
-    createdAt: '2026-09-27T09:00:00.000Z',
-    ...overrides,
-  }) as OutboxEntry;
+      seq: 1,
+      mutationId: 'm-1',
+      type: 'job.start',
+      jobId: 'job-1',
+      jobTitle: 'AC repair',
+      payload: null,
+      baseVersion: 2,
+      occurredAt: '2026-09-27T09:00:00.000Z',
+      status: 'conflict',
+      attempts: 0,
+      nextAttemptAt: null,
+      lastAttemptAt: null,
+      lastError: { code: 'INVALID_STATUS_TRANSITION', message: 'x' },
+      createdAt: '2026-09-27T09:00:00.000Z',
+      ...overrides,
+    } as OutboxEntry);
 
   it('explains a state conflict and a lost assignment differently', () => {
     expect(describeProblem(problem({}))).toBe(

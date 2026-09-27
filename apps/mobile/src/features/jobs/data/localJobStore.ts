@@ -96,10 +96,7 @@ function toEntry(row: SqlRow): OutboxEntry {
   return {
     seq: integer(row, 'seq'),
     mutationId: text(row, 'mutation_id'),
-    ...toCommand(
-      text(row, 'type') as OutboxType,
-      optionalText(row, 'payload'),
-    ),
+    ...toCommand(text(row, 'type') as OutboxType, optionalText(row, 'payload')),
     jobId: text(row, 'job_id'),
     jobTitle: text(row, 'job_title'),
     baseVersion: integer(row, 'base_version'),

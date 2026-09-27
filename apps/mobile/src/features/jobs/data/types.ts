@@ -107,7 +107,11 @@ export interface OutboxCounts {
 }
 
 /** Where a photo is in its journey to the server, for the evidence gallery. */
-export type EvidenceUploadState = 'pending' | 'uploading' | 'uploaded' | 'failed';
+export type EvidenceUploadState =
+  | 'pending'
+  | 'uploading'
+  | 'uploaded'
+  | 'failed';
 
 export interface LocalEvidenceFile {
   readonly evidenceId: string;

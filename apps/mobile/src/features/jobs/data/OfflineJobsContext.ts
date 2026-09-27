@@ -106,8 +106,5 @@ export function useLocalEvidenceFiles(
 
 /** The job's commands not yet confirmed by the server (to mark messages as unsent). */
 export function useActiveEntries(jobId: string): LocalQuery<OutboxEntry[]> {
-  return useLocalQuery(
-    store => store.activeEntries(jobId),
-    `active:${jobId}`,
-  );
+  return useLocalQuery(store => store.activeEntries(jobId), `active:${jobId}`);
 }

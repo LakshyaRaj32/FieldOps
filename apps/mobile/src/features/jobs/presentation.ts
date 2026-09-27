@@ -271,7 +271,9 @@ export function describeActionLocation(location: ActionLocation): string {
       5,
     )} (${accuracy})`;
   }
-  return `${formatDistance(location.distanceMeters)} from the site (${accuracy})`;
+  return `${formatDistance(
+    location.distanceMeters,
+  )} from the site (${accuracy})`;
 }
 
 export const EVIDENCE_STATE_LABELS: Readonly<

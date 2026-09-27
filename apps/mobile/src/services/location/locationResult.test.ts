@@ -50,7 +50,9 @@ describe('toDeviceLocation', () => {
 describe('describeLocationFailure', () => {
   it('offers the action that can fix each case', () => {
     expect(describeLocationFailure('permission_denied').action).toBe('request');
-    expect(describeLocationFailure('permission_blocked').action).toBe('settings');
+    expect(describeLocationFailure('permission_blocked').action).toBe(
+      'settings',
+    );
     expect(describeLocationFailure('services_disabled').action).toBe(
       'location_settings',
     );

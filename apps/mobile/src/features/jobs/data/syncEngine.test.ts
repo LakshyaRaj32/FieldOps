@@ -571,7 +571,11 @@ describe('JobSyncEngine — field operations (Phase 4)', () => {
     const uri = photo().fileUri;
     const { store, engine, server, files } = await setupWithFiles([uri]);
     await store.addEvidence('job-1', photo());
-    server.faults.push({ type: 'http', status: 413, code: 'PAYLOAD_TOO_LARGE' });
+    server.faults.push({
+      type: 'http',
+      status: 413,
+      code: 'PAYLOAD_TOO_LARGE',
+    });
     await engine.sync();
     const [problem] = await store.problemEntries();
 

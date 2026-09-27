@@ -34,9 +34,9 @@ describe('toPickResult', () => {
     expect(toPickResult({ errorCode: 'permission' })).toEqual({
       kind: 'permission',
     });
-    expect(
-      toPickResult({ errorCode: 'others', errorMessage: 'boom' }),
-    ).toEqual({ kind: 'error', message: 'boom' });
+    expect(toPickResult({ errorCode: 'others', errorMessage: 'boom' })).toEqual(
+      { kind: 'error', message: 'boom' },
+    );
   });
 
   it('refuses types the server would reject (HEIC, GIF, video)', () => {

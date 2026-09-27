@@ -85,7 +85,8 @@ export class RealtimeClient {
       randomizationFactor: 0.5,
       timeout: 10_000,
       // Evaluated on every attempt, so a refreshed token is picked up.
-      auth: callback => callback({ token: this.options.getAccessToken() ?? '' }),
+      auth: callback =>
+        callback({ token: this.options.getAccessToken() ?? '' }),
     });
     this.socket = socket;
 

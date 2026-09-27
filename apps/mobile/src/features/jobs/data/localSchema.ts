@@ -62,7 +62,8 @@ export const JOB_MIGRATIONS: readonly Migration[] = [
   },
   {
     version: 2,
-    description: 'field operations: evidence and message commands, evidence files',
+    description:
+      'field operations: evidence and message commands, evidence files',
     statements: [
       // SQLite cannot change a CHECK constraint in place: the outbox is rebuilt with the new
       // command types, rows copied unchanged (same seq, mutation IDs and statuses).

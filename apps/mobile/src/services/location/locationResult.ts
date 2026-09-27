@@ -81,7 +81,8 @@ export function describeLocationFailure(kind: LocationFailure): {
       };
     case 'services_disabled':
       return {
-        message: 'Location is switched off on this phone. Turn it on to record where you work.',
+        message:
+          'Location is switched off on this phone. Turn it on to record where you work.',
         action: 'location_settings',
       };
     case 'timeout':

@@ -78,7 +78,9 @@ describe('projectJob', () => {
   });
 
   it("shows a pending start's location with the phone's distance estimate", () => {
-    const job = serverJob({ location: { latitude: 28.6139, longitude: 77.209 } });
+    const job = serverJob({
+      location: { latitude: 28.6139, longitude: 77.209 },
+    });
     const withFix = entry({
       type: 'job.start',
       payload: {

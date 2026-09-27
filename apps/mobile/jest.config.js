@@ -5,7 +5,8 @@ module.exports = {
   // @fieldops/shared ships compiled JavaScript for Node; the app (Metro) and its tests use
   // the TypeScript source.
   moduleNameMapper: {
-    '^@fieldops/shared$': '<rootDir>/../../packages/shared/src/job-state-machine.ts',
+    '^@fieldops/shared$':
+      '<rootDir>/../../packages/shared/src/job-state-machine.ts',
     '^@fieldops/shared/geo$': '<rootDir>/../../packages/shared/src/geo.ts',
   },
   testPathIgnorePatterns: ['/node_modules/', '<rootDir>/android/'],
