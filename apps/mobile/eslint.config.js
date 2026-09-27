@@ -47,6 +47,17 @@ module.exports = [
             boundary('react-native-image-picker', 'src/services/media'),
             boundary('@react-native-firebase/app', 'src/services/push'),
             boundary('@react-native-firebase/messaging', 'src/services/push'),
+            boundary(
+              '@react-native-community/datetimepicker',
+              'src/components/common/DateTimeField.tsx',
+            ),
+          ],
+          patterns: [
+            {
+              group: ['@react-native-vector-icons/*'],
+              message:
+                'Import icons only inside src/components/ui/Icon.tsx. Use <Icon> instead.',
+            },
           ],
         },
       ],
@@ -65,6 +76,13 @@ module.exports = [
       'src/services/realtime/**',
       'src/services/media/**',
       'src/services/push/**',
+    ],
+    rules: { 'no-restricted-imports': 'off' },
+  },
+  {
+    files: [
+      'src/components/ui/Icon.tsx',
+      'src/components/common/DateTimeField.tsx',
     ],
     rules: { 'no-restricted-imports': 'off' },
   },

@@ -24,9 +24,11 @@
   "dependencies": {
     "@fieldops/shared": "*",
     "@fieldops/types": "*",
+    "@react-native-community/datetimepicker": "^9.2.1",
     "@react-native-community/netinfo": "^12.0.1",
     "@react-native-firebase/app": "^23.0.0",
     "@react-native-firebase/messaging": "^23.0.0",
+    "@react-native-vector-icons/ionicons": "^13.1.4",
     "@react-navigation/bottom-tabs": "^7.19.2",
     "@react-navigation/native": "^7.4.1",
     "@react-navigation/native-stack": "^7.19.2",
