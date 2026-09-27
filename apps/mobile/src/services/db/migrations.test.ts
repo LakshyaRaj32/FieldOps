@@ -18,7 +18,12 @@ describe('local database migrations', () => {
 
     expect(await migrate(db, JOB_MIGRATIONS)).toBe(JOB_MIGRATIONS.length);
     expect(await currentVersion(db)).toBe(JOB_MIGRATIONS.length);
-    expect(await tables(db)).toEqual(['jobs', 'outbox', 'sync_state']);
+    expect(await tables(db)).toEqual([
+      'evidence_files',
+      'jobs',
+      'outbox',
+      'sync_state',
+    ]);
   });
 
   it('does nothing on an up-to-date database', async () => {

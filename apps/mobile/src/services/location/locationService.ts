@@ -66,7 +66,7 @@ export async function getCurrentLocation({
   readonly request?: boolean;
   readonly timeoutMs?: number;
 } = {}): Promise<LocationResult> {
-  if (NativeFieldOpsLocation === null) {
+  if (NativeFieldOpsLocation == null) {
     return { kind: 'unavailable' };
   }
   let permission: LocationPermission = await locationPermission();
@@ -88,7 +88,9 @@ export async function getCurrentLocation({
       MAXIMUM_AGE_MS,
     );
     const location = toDeviceLocation(fix);
-    return location === null ? { kind: 'unavailable' } : { kind: 'ok', location };
+    return location === null
+      ? { kind: 'unavailable' }
+      : { kind: 'ok', location };
   } catch (error) {
     return failureFromNativeCode((error as { code?: unknown } | null)?.code);
   }

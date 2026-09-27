@@ -20,7 +20,7 @@ export class EvidenceFilesUnavailableError extends Error {
 }
 
 function nativeModule() {
-  if (NativeFieldOpsFiles === null) {
+  if (NativeFieldOpsFiles == null) {
     throw new EvidenceFilesUnavailableError(
       'Evidence storage is not available on this platform',
     );

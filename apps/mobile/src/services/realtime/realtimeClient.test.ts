@@ -71,7 +71,7 @@ function setup(refreshSession: () => Promise<boolean> = async () => true) {
   return { client, socket, statuses, events, onConnected, refresh, connect };
 }
 
-const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+const flush = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
 describe('RealtimeClient', () => {
   it('connects over WebSocket only, with the access token, and resyncs on connect', () => {
@@ -83,7 +83,8 @@ describe('RealtimeClient', () => {
       transports: ['websocket'],
       reconnectionDelayMax: 30_000,
     });
-    const auth = socket.options.auth as (cb: (data: object) => void) => void;
+    const { auth: authOption } = socket.options;
+    const auth = authOption as (cb: (data: object) => void) => void;
     const received: object[] = [];
     auth(data => received.push(data));
     expect(received).toEqual([{ token: 'access-token' }]);
@@ -190,7 +191,9 @@ describe('parseRealtimeEnvelope', () => {
   });
 
   it('refuses unknown types, versions and changes', () => {
-    expect(parseRealtimeEnvelope({ ...envelope(), type: 'user.deleted' })).toBeNull();
+    expect(
+      parseRealtimeEnvelope({ ...envelope(), type: 'user.deleted' }),
+    ).toBeNull();
     expect(parseRealtimeEnvelope({ ...envelope(), version: 2 })).toBeNull();
     expect(
       parseRealtimeEnvelope({

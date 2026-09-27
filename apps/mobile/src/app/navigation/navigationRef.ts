@@ -17,7 +17,7 @@ function tryNavigate(): void {
   }
   const state = navigationRef.getRootState();
   // Only the signed-in App flow has job screens.
-  if (!state.routeNames.includes('App')) {
+  if (state === undefined || !state.routeNames.includes('App')) {
     return;
   }
   const jobId = pendingJobId;
@@ -36,7 +36,7 @@ export function openJobWhenReady(jobId: string): void {
 export function openNotificationsWhenReady(): void {
   if (navigationRef.isReady()) {
     const state = navigationRef.getRootState();
-    if (state.routeNames.includes('App')) {
+    if (state?.routeNames.includes('App') === true) {
       navigationRef.navigate('App', { screen: 'Notifications' });
     }
   }

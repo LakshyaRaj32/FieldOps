@@ -3,11 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { LocalDiskObjectStorage } from './local-disk-object-storage.js';
-import { isValidStorageKey } from './object-storage.js';
+import { isValidStorageKey, type ObjectStorage } from './object-storage.js';
 
 describe('LocalDiskObjectStorage', () => {
   let root: string;
-  let storage: LocalDiskObjectStorage;
+  // Used through the interface, as the rest of the API does.
+  let storage: ObjectStorage;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'fieldops-storage-'));

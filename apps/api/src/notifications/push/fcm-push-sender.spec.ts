@@ -30,14 +30,27 @@ const message = {
 interface Call {
   readonly url: string;
   readonly init: RequestInit;
+  /** The request body as sent (the sender only sends text bodies). */
+  readonly body: string;
 }
 
-function fakeFetch(
-  answer: (call: Call) => { status: number; body: unknown },
-): { fetchFn: typeof fetch; calls: Call[] } {
+function fakeFetch(answer: (call: Call) => { status: number; body: unknown }): {
+  fetchFn: typeof fetch;
+  calls: Call[];
+} {
   const calls: Call[] = [];
-  const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const call = { url: String(input), init: init ?? {} };
+  const fetchFn = (async (
+    input: Parameters<typeof fetch>[0],
+    init?: RequestInit,
+  ) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+    const sent = typeof init?.body === 'string' ? init.body : '';
+    const call = { url, init: init ?? {}, body: sent };
     calls.push(call);
     const { status, body } = answer(call);
     return new Response(JSON.stringify(body), { status });
@@ -45,28 +58,36 @@ function fakeFetch(
   return { fetchFn, calls };
 }
 
-const oauthOk = { status: 200, body: { access_token: 'ya29.test', expires_in: 3600 } };
+const oauthOk = {
+  status: 200,
+  body: { access_token: 'ya29.test', expires_in: 3600 },
+};
 
 describe('FcmPushSender', () => {
   const jwt = new JwtService();
 
   it('exchanges a signed service-account assertion, then sends the message', async () => {
     const { fetchFn, calls } = fakeFetch(call =>
-      call.url.includes('oauth2') ? oauthOk : { status: 200, body: { name: 'm' } },
+      call.url.includes('oauth2')
+        ? oauthOk
+        : { status: 200, body: { name: 'm' } },
     );
     const sender = new FcmPushSender(account, jwt, fetchFn);
 
     expect(await sender.send('device-token', message)).toBe('sent');
 
     const [oauth, send] = calls;
-    const form = new URLSearchParams(String(oauth?.init.body));
+    const form = new URLSearchParams(oauth?.body);
     expect(form.get('grant_type')).toBe(
       'urn:ietf:params:oauth:grant-type:jwt-bearer',
     );
-    const claims = jwt.verify<Record<string, unknown>>(form.get('assertion') ?? '', {
-      publicKey,
-      algorithms: ['RS256'],
-    });
+    const claims = jwt.verify<Record<string, unknown>>(
+      form.get('assertion') ?? '',
+      {
+        publicKey,
+        algorithms: ['RS256'],
+      },
+    );
     expect(claims).toMatchObject({
       iss: account.clientEmail,
       aud: 'https://oauth2.googleapis.com/token',
@@ -79,7 +100,7 @@ describe('FcmPushSender', () => {
     expect(new Headers(send?.init.headers).get('Authorization')).toBe(
       'Bearer ya29.test',
     );
-    expect(JSON.parse(String(send?.init.body))).toEqual({
+    expect(JSON.parse(send?.body ?? '')).toEqual({
       message: {
         token: 'device-token',
         notification: { title: message.title, body: message.body },
@@ -140,9 +161,9 @@ describe('FcmPushSender', () => {
     const fetchFn = (async () => {
       throw new TypeError('fetch failed');
     }) as typeof fetch;
-    expect(await new FcmPushSender(account, jwt, fetchFn).send('t', message)).toBe(
-      'failed',
-    );
+    expect(
+      await new FcmPushSender(account, jwt, fetchFn).send('t', message),
+    ).toBe('failed');
   });
 });
 

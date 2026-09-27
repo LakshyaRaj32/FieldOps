@@ -24,6 +24,12 @@ import {
 } from '../navigation/navigationRef';
 import { useResync } from './RealtimeConnection';
 
+/** The job a push message is about, if it names one. */
+function jobIdOf(data: Readonly<Record<string, string>> | null) {
+  const { jobId } = data ?? {};
+  return typeof jobId === 'string' ? jobId : undefined;
+}
+
 /**
  * Push notifications for the signed-in user (docs/notifications.md):
  *
@@ -82,7 +88,7 @@ export function PushNotifications({
     const unsubscribe = listenForPush({
       onToken: register,
       onForegroundMessage: data => {
-        resyncRef.current(data?.jobId);
+        resyncRef.current(jobIdOf(data));
       },
       onOpened: data => {
         const route = routeFor(data);

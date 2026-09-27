@@ -35,13 +35,16 @@ export function parseRealtimeEnvelope(value: unknown): RealtimeEnvelope | null {
     typeof occurredAt !== 'string' ||
     version !== 1 ||
     !REALTIME_EVENT_TYPES.includes(type as RealtimeEventType) ||
-    !isRecord(data) ||
-    typeof data.jobId !== 'string'
+    !isRecord(data)
   ) {
     return null;
   }
+  const { jobId, change, status, version: jobVersion, messageId } = data;
+  if (typeof jobId !== 'string') {
+    return null;
+  }
   if (type === 'job.changed') {
-    if (!JOB_CHANGES.includes(data.change as JobChange)) {
+    if (!JOB_CHANGES.includes(change as JobChange)) {
       return null;
     }
     return {
@@ -50,14 +53,14 @@ export function parseRealtimeEnvelope(value: unknown): RealtimeEnvelope | null {
       version,
       occurredAt,
       data: {
-        jobId: data.jobId,
-        change: data.change as JobChange,
-        ...(typeof data.status === 'string' && { status: data.status }),
-        ...(typeof data.version === 'number' && { version: data.version }),
+        jobId,
+        change: change as JobChange,
+        ...(typeof status === 'string' && { status }),
+        ...(typeof jobVersion === 'number' && { version: jobVersion }),
       },
     };
   }
-  if (typeof data.messageId !== 'string') {
+  if (typeof messageId !== 'string') {
     return null;
   }
   return {
@@ -65,7 +68,7 @@ export function parseRealtimeEnvelope(value: unknown): RealtimeEnvelope | null {
     type: 'job.message.created',
     version,
     occurredAt,
-    data: { jobId: data.jobId, messageId: data.messageId },
+    data: { jobId, messageId },
   };
 }
 
@@ -79,11 +82,13 @@ export type ConnectRefusal =
   | 'unreachable';
 
 export function classifyConnectError(error: unknown): ConnectRefusal {
+  const reported = isRecord(error) ? error : {};
+  const { message: reportedMessage } = reported;
   const message =
     error instanceof Error
       ? error.message
-      : isRecord(error) && typeof error.message === 'string'
-      ? error.message
+      : typeof reportedMessage === 'string'
+      ? reportedMessage
       : '';
   switch (message) {
     case 'ACCESS_TOKEN_EXPIRED':
