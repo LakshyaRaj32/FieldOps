@@ -7,7 +7,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: free
+    plan: starter
     region: oregon # Options: oregon, frankfurt, singapore, ohio
     healthCheckPath: /health/live
     autoDeploy: true
@@ -47,9 +47,14 @@ services:
 
       # Local disk storage directory for uploaded evidence
       - key: STORAGE_DIR
-        value: ./storage
+        value: /var/data/storage
 
       # CORS origins (comma-separated, leave empty or add frontend domain if web client is introduced)
       - key: CORS_ORIGINS
         value: ""
 
+    # Optional: Attach persistent disk storage for evidence photos across restarts
+    disk:
+      name: fieldops-storage
+      mountPath: /var/data/storage
+      sizeGB: 10
