@@ -1,12 +1,11 @@
 import { applyDecorators } from '@nestjs/common';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  ORGANIZATION_ROLES,
-  type CreateMemberRequest,
-  type Member,
-  type OrganizationRole,
-  type SetManagerRequest,
-  type UpdateMemberRequest,
+import type {
+  CreateMemberRequest,
+  Member,
+  OrganizationRole,
+  SetManagerRequest,
+  UpdateMemberRequest,
 } from '@fieldops/types';
 import { Type } from 'class-transformer';
 import {
@@ -26,7 +25,7 @@ import {
 import { EmailField, PasswordField, trimmed } from '../../auth/dto/fields.js';
 import { UserSummaryDto } from '../../common/dto/user-summary.dto.js';
 import type { MemberRecord } from '../users.service.js';
-import { Role } from '../role.js';
+import { ORGANIZATION_ROLES, Role } from '../role.js';
 
 const NameField = (label: string): PropertyDecorator =>
   applyDecorators(
