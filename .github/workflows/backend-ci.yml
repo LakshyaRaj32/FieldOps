@@ -1,0 +1,85 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/api/**'
+      - 'packages/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker-entrypoint.sh'
+      - 'package*.json'
+      - '.github/workflows/backend-ci.yml'
+  pull_request:
+    paths:
+      - 'apps/api/**'
+      - 'packages/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker-entrypoint.sh'
+      - 'package*.json'
+      - '.github/workflows/backend-ci.yml'
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Build & Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install dependencies (API & workspace packages)
+        run: |
+          npm ci \
+            --workspace=@fieldops/api \
+            --workspace=@fieldops/shared \
+            --workspace=@fieldops/types \
+            --workspace=@fieldops/config \
+            --include-workspace-root
+
+      - name: Build shared package
+        run: npm run build -w @fieldops/shared
+
+      - name: Build API backend
+        run: npm run api:build
+
+      - name: Run Typecheck
+        run: |
+          npm run typecheck -w @fieldops/types
+          npm run typecheck -w @fieldops/shared
+          npm run typecheck -w @fieldops/api
+
+  docker:
+    name: Docker Build Check
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (Cache verification)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: fieldops-api:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

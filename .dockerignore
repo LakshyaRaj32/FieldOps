@@ -1,0 +1,54 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Monorepo workspaces not needed for backend API
+apps/mobile
+
+# Dependencies and lockfile backups
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Build artifacts & caches
+dist
+*.tsbuildinfo
+.cache
+.turbo
+.vite
+.vite-temp
+
+# Storage and uploads
+storage
+test-storage
+*.log
+
+# Documentation and design assets
+docs
+*.md
+!README.md
+
+# Testing & Coverage
+test
+coverage
+*.spec.ts
+*.test.ts
+vitest.config*.ts
+
+# Environment and secrets (prevent local secrets from leaking into images)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+firebase-service-account*.json
+
+# OS and Editor files
+.vscode
+.idea
+.editorconfig
+.DS_Store
+Thumbs.db
