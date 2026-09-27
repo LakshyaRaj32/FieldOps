@@ -114,6 +114,15 @@ so a message arriving before the app was ever opened still has its channel.
 | `PUT /api/v1/notifications/devices/current` | Register this session's FCM token |
 | `DELETE /api/v1/notifications/devices/current` | Stop push to this session |
 
+**In the app** (UI/UX phase): the inbox is a compact list. Unread entries sit on the brighter
+surface with a bold title, a filled colored icon and a dot, and screen readers hear
+"Unread" first. Read entries use the page background, regular weight and an outline icon.
+Tapping an entry marks it read and opens its job. **Mark all as read** changes only the read
+state: entries stay in place, nothing navigates. Both actions update the cached inbox (and
+the tab badge) at once, then call the API; if the call fails, the change is undone and an
+inline message says so. The refetch that follows brings in the server's timestamps
+(`markReadInPage` in `features/notifications/api/notificationsApi.ts`).
+
 Not built (master plan "later" items): notification preferences, per-type mute, email/SMS.
 
 ## Setup (push)

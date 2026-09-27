@@ -53,16 +53,19 @@ apps/mobile/src/
 │   ├── config/                 Environment parsing/validation (only importer of react-native-config)
 │   ├── navigation/             Root/Auth/App navigators, param-list types, navigation theme, screen layout
 │   └── providers/              AppProviders (safe area, Redux, theme, error boundary), AppServices
+├── assets/                     Images bundled with the app (brand-mark.png, rendered with the launcher icon)
 ├── components/
-│   ├── ui/                     Primitives: AppText, Button, Card, Badge, Screen, SegmentedControl, TextField
-│   └── common/                 App-aware composites: Loading/Error/Empty states, InfoRow, ErrorBoundary, ConnectivityBanner
+│   ├── ui/                     Primitives: AppText, Button, Card, Badge, Icon, Screen (keyboard-aware),
+│   │                           SectionTitle, SegmentedControl, Skeleton, TextField (+ FieldLabel/FieldMessage)
+│   └── common/                 App-aware composites: Loading/Error/Empty states, InfoRow, ErrorBoundary,
+│                               ConnectivityBanner, DateTimeField (native pickers), ImageViewer (full-screen zoom)
 ├── features/                   Vertical slices; each owns its screens and feature-local components
 │   ├── auth/                   Login, Register, auth endpoints, session thunks, form validation
 │   ├── dashboard/              Dashboard tab
 │   ├── jobs/                   Jobs stack: list, details, create/edit, assign; job API, rules, components
 │   ├── notifications/          Notifications tab (placeholder until Phase 4)
 │   └── profile/                Account, theme preference, diagnostics
-├── hooks/                      Cross-feature hooks (useConnectivity)
+├── hooks/                      Cross-feature hooks (useConnectivity, useKeyboardInset)
 ├── services/                   Infrastructure wrappers; the only code allowed to touch these libraries
 │   ├── api/                    RTK Query base API, base query (auth header, refresh), request IDs, listeners, health
 │   ├── auth/                   Credential store (sole owner of tokens), payload checks, session events
@@ -97,7 +100,9 @@ repositories).
 - `services/` never imports from `features/` or `store/`. `app/providers/AppServices.tsx` is
   the single place that connects services to the store.
 - **ESLint boundaries:** `react-native-config` may only be imported in `app/config`, NetInfo
-  only in `services/network`, MMKV only in `services/storage`. The global `fetch` is forbidden
+  only in `services/network`, MMKV only in `services/storage`, the icon font
+  (`@react-native-vector-icons/*`) only in `components/ui/Icon.tsx`, and the date/time picker
+  only in `components/common/DateTimeField.tsx`. The global `fetch` is forbidden
   in app code (use the API layer), and `console` is forbidden outside `utils/logger.ts`.
 - Screens are thin: they compose hooks and components.
 
@@ -242,6 +247,11 @@ RootNavigator (native stack, NavigationContainer themed from the app theme)
 - `AuthNavigator` has Login and Register (V2). While the session is `restoring`, the root
   renders a loading screen instead of either navigator, so the sign-in screen never flashes
   for a signed-in user. Password reset is future work.
+
+**Tab icons (UI/UX phase).** Every tab has an Ionicons icon: filled while active, outline
+while inactive, so the active tab differs by shape as well as color. The Notifications tab
+shows the unread count as a badge and in its accessibility label. The tab bar hides while the
+keyboard is open, so forms get the full height.
 
 **Phase 2 kept one tab set for every role.** Role differences live inside the screens
 (list title, assignee shown, "New job") and, above all, in the server's `allowedActions`.

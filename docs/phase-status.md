@@ -4,8 +4,8 @@ The project is managed in six phases ([master-development-plan.md](master-develo
 This file records where the project stands. Update it at every phase checkpoint.
 
 ```text
-Current Phase:   Phase 4 — Field Operations
-Phase Status:    CODE WRITTEN — not yet installed, built, tested or run (BLOCKED, see below)
+Current Phase:   Phase 4 — Field Operations, plus the UI/UX improvement phase
+Phase Status:    AUTOMATED CHECKS PASS — device verification pending (the owner tests on the phone)
 Completed Phase: Phase 1 — Foundation
 Next Phase:      Phase 5 — Production Engineering (not started)
 ```
@@ -16,11 +16,12 @@ physical Android phone yet**: no device was connected (`adb devices` empty) duri
 implementation session. Both device checklists can be done in one sitting:
 [Phase 2](#verification-still-required) first, then [Phase 3](#phase-3-device-verification).
 
-**Phase 4 code is written but unverified.** In the Phase 4 session the repository owner asked
-that no machine resources (installs, builds, test runs) be used without permission, so the new
-dependencies are declared but not installed, and no test, type check, lint, migration, build
-or device run has been done. See [Phase 4](#phase-4--field-operations) for exactly what
-remains.
+**Phase 4 is now installed and checked automatically, but not yet run on the phone.** The
+UI/UX session (2026-09-27) installed the dependencies, fixed the type errors in the Phase 4
+code, ran every test suite and the API E2E suite (which applied the Phase 4 migration to the
+test database), and built the Android debug APK. See
+[UI/UX improvement](#uiux-improvement-phase) for the results and
+[Phase 4](#phase-4--field-operations) for the device checklist.
 
 When they pass, set:
 
@@ -443,10 +444,15 @@ When everything passes: set this phase COMPLETE, commit, tag `phase-4-field-oper
 
 ### Known issues and limitations
 
-- **Not installed, compiled, tested or run** (see above). Hand-written parts most likely to
-  need a fix on the first run: the migration SQL (must match Prisma's schema diff), the Kotlin
-  modules against the generated specs, React Native Firebase with no Firebase configuration,
-  and dependency versions.
+- **Not run on the phone yet.** Since the UI/UX session: dependencies installed, type checks
+  and lint pass, unit tests pass except one (below), the API E2E suite passes (so the
+  migration SQL applies cleanly), and the debug APK builds (so the Kotlin modules compile
+  against the generated specs). Still unproven: React Native Firebase at runtime without
+  `google-services.json`, and the device checklist above.
+- **One failing API unit test:** `evidence-image.spec.ts` › "removes EXIF, XMP and comments
+  but keeps the orientation". The rewritten JPEG's orientation segment does not match what
+  the test expects. Either the test or the sanitizer (`jobs/domain/evidence-image.ts`) needs a
+  fix; the phone's photo rotation should be checked in step 5 of the device checklist.
 - React Native Firebase is expected to stay inert without `google-services.json`; if its
   native side fails at start-up without one, a dummy Firebase project is the workaround.
 - Push has no retry before Phase 5 (BullMQ); the inbox and sync cover a lost push.
@@ -459,3 +465,126 @@ When everything passes: set this phase COMPLETE, commit, tag `phase-4-field-oper
 - Documents and signatures are not implemented (photos only); no notification preferences;
   no read receipts or typing indicators (out of scope by design).
 - The Phase 2 and Phase 3 device checklists are still open as well.
+
+---
+
+## UI/UX improvement phase
+
+A visual and usability pass over the whole app, keeping every feature, API contract and the
+offline architecture as they were. Implemented 2026-09-27.
+
+### UI/UX changes
+
+- **Design system.** The existing theme (`src/theme`) was extended, not replaced: a refreshed
+  palette with new roles (`secondary`, `info`, `borderStrong`, `textSubtle`, `overlay`),
+  elevation tokens (soft shadows in light mode, borders only in dark mode), icon sizes,
+  control heights (48 dp touch targets), a `captionStrong` text style and a documented type
+  scale (screen title → section → body → caption). Chart colors for job statuses were checked
+  for color-vision-deficiency separation in both modes.
+- **Common components.** `Button` gained leading icons, a `sm` size, a pressed state, and the
+  same disabled and loading look for every variant. `TextField` gained a readable label,
+  focus/error/disabled states, an error icon, hints, multiline sizing, and "Next" moves to the
+  next field without closing the keyboard. `Card` is flatter (hairline border and a soft
+  shadow) with a dense option. `Badge` gained icons and an `info` tone. New components:
+  `Icon`, `SectionTitle` (icon + heading on every card), `Skeleton`. Empty, error and loading
+  states have icons, clear messages and retry buttons, and never show raw server errors.
+- **Keyboard-aware forms.** `Screen` pads its bottom by exactly the part the keyboard covers
+  (`hooks/useKeyboardInset`), measured from the screen's real position. This is needed
+  because the app is edge-to-edge, so Android 15+ no longer resizes the window. Android's
+  scroll view then keeps the focused input visible. Tapping outside an input or dragging
+  closes the keyboard, and the tab bar hides while typing. No extra space appears while the
+  keyboard is closed. This applies to every form: sign-in, registration, job create/edit,
+  field notes and messages.
+- **Date and time pickers.** The job form's typed `YYYY-MM-DD` / `HH:MM` fields are replaced
+  by `DateTimeField`, which opens the native Android date or time dialog and shows the value
+  as "Mon, 28 Sep 2026" / "10:30 AM". The form keeps the same values and validation, and the
+  request is unchanged (`scheduledAt`, ISO, device time zone).
+- **Notifications.** The inbox is a compact list (about 64 dp rows: icon, title, two-line
+  preview, relative time) instead of large cards. Unread entries have the brighter surface, a
+  bold title, a filled colored icon and a dot, and screen readers hear "Unread". Read entries
+  are muted but readable. Loading shows skeleton rows. See
+  [notifications.md](notifications.md#inbox-api).
+- **Mark all as read** changes only the read state. Entries stay in place and nothing
+  navigates. The list and the tab badge update at once (an optimistic cache update); a
+  failure undoes it and shows an inline message. Marking a single entry works the same way.
+- **Tab icons.** Dashboard, Jobs, Notifications and Profile have Ionicons icons: filled when
+  active, outline when inactive. The unread count appears in the badge and the accessibility
+  label. The same four tabs are right for every role; role differences live in the screens.
+- **Manager dashboard.** Built from real data only:
+  - Overview tiles: open (with unassigned), overdue, due in 24 h, in progress (with assigned),
+    completed in 7 days, and completion rate. The rate shows "–" when nothing was closed.
+  - Jobs by status: a stacked bar with a labeled legend.
+  - Needs a worker: unassigned jobs.
+  - Up next.
+  - Team workload: open jobs per worker.
+  - Recent activity: the latest job history across the team; each entry opens its job.
+
+  Pull-to-refresh updates every section, and realtime events keep it current. Revenue and
+  customer metrics are not shown because the product has no such data yet. Workers get a
+  smaller home screen with open / in progress / completed (7 days) from the phone's own
+  database, so it still works offline.
+- **Photos.** Evidence thumbnails are image buttons with an expand badge. Tapping one opens
+  `ImageViewer`, a full-screen view with the aspect ratio kept. Pinch or double-tap zooms up
+  to 4×, you can drag while zoomed, and a zoom button covers people who can't pinch. It closes
+  with the button, Android Back, or a swipe down. It uses the same image source as the
+  thumbnail, so nothing is uploaded or downloaded again.
+- **App icon.** An adaptive launcher icon (Android 8+), plus legacy PNGs for Android 7: a
+  white map pin with a check mark on the brand blue. It has no lettering, so it works with
+  any product name. The sign-in screen shows the same mark.
+
+### Technical changes
+
+| Area | Change |
+| --- | --- |
+| New dependencies | `@react-native-vector-icons/ionicons` (font icons; the font is packaged by Gradle, imported through `/static`, so it is not bundled twice) and `@react-native-community/datetimepicker` (native pickers). Both are small, autolinked and New Architecture ready. No gesture or UI framework was added: the viewer uses React Native's `PanResponder` and `Animated`, and the charts are plain views |
+| Removed dependencies | None found unused |
+| Components created | `ui/Icon`, `ui/SectionTitle`, `ui/Skeleton`, `common/DateTimeField`, `common/ImageViewer` (+ pure `imageZoom`), `notifications/components/NotificationItem`, `dashboard/components/{ManagerDashboard, MetricTile, StatusBreakdown}` |
+| Components modified | `Button`, `TextField` (exports `FieldLabel`, `FieldMessage`, `fieldColors`), `Card`, `Badge`, `AppText`, `Screen`, `EmptyState`, `ErrorState`, `ConnectivityBanner`, `SyncStatusBanner`, `JobCard` (icons, `dense`), `JobDetailSections`, `FieldOperationSections` (gallery + viewer), `NotificationsScreen`, `DashboardScreen`, `JobFormScreen`, `JobsScreen`, `AssignWorkerScreen`, `LoginScreen`, `RegisterScreen`, `ProfileScreen` and the profile/sync cards |
+| Navigation | Tab icons, badge styling, `tabBarHideOnKeyboard`, flat headers. No routes changed |
+| State management | Optimistic `updateQueryData` for mark read / mark all read (`markReadInPage`, pure and tested); new RTK Query endpoint `getJobOverview`, tagged with the job list so existing invalidations refresh it |
+| API | New read-only `GET /api/v1/jobs/overview` (MANAGER, ADMIN): pure shaping in `jobs/domain/job-overview.ts`, one REPEATABLE READ batch in the repository, Swagger DTOs, shared types `JobOverview`, `WorkerWorkload` and `JobActivity` ([api.md](api.md#job-overview)). No existing endpoint or contract changed |
+| Configuration | Adaptive icon resources (`mipmap-anydpi-v26`, `drawable/ic_launcher_*.xml`); legacy PNGs and `src/assets/brand-mark*.png` regenerated with `apps/mobile/scripts/render-app-icon.py`; ESLint boundaries: icons only in `ui/Icon.tsx`, the picker only in `common/DateTimeField.tsx` |
+| Fixes to earlier work | Type errors in the never-compiled Phase 4 code (index-signature access, nullable Turbo Modules, test typings); a stale table list in `migrations.test.ts`; lint warnings; Phase 4 files formatted with Prettier |
+
+### Testing
+
+```text
+[x] npm install (2 packages added)
+[x] Type checks: mobile, API, shared types (pass)
+[x] Lint: mobile ESLint 0 problems, API oxlint 0 warnings
+[x] Mobile unit tests: 245 passed, 2 skipped (live tests); new: markReadInPage, isJobOverview,
+    dashboard metrics, image-zoom geometry, date formatting
+[~] API unit tests: 129 passed, 1 failed (pre-existing evidence-image case, see Phase 4
+    known issues); new: job overview shaping
+[x] API E2E against PostgreSQL: 143 passed (new: overview access, empty state, real counts,
+    workload and activity)
+[x] Android build: gradlew assembleDebug (arm64-v8a) succeeded, including codegen and
+    autolinking for the two new native packages
+[ ] Forms with keyboard open (short: sign-in; long: job form; bottom fields: checklist,
+    note and message composers; multiline)          — owner, on the phone
+[ ] Date picker / time picker                         — owner, on the phone
+[ ] Notifications: read vs unread, mark all as read   — owner, on the phone
+[ ] Tab navigation and icons                          — owner, on the phone
+[ ] Manager dashboard                                 — owner, on the phone
+[ ] Photo thumbnail → full-screen viewer, zoom, close — owner, on the phone
+[ ] Launcher icon on the home screen                  — owner, on the phone
+[ ] Different screen sizes (layouts use flex and wrap; tiles 2 per row, 3 from 600 dp)
+[ ] Regression: sign-in, jobs, offline sync, messages, photos (the Phase 2–4 checklists)
+```
+
+The APK was built but not installed or run: the owner does the device testing.
+
+### Known limitations and next steps
+
+- The app is Android-only (no `ios/` project). The iOS paths in `Screen` and `DateTimeField`
+  follow the platform's documented behavior but have never been built.
+- The activity feed reads the newest `job_events` without a dedicated `created_at` index.
+  That is fine at single-organization scale; add the index with the Phase 5 performance work.
+- Revenue/earnings and customer metrics need data the product does not have yet. The
+  overview endpoint can grow fields without breaking the app, which validates only what it
+  uses.
+- The viewer shows one photo at a time (no swiping between photos yet).
+- Themed (monochrome) launcher icons for Android 13+ are not provided.
+- The product is named FieldOps in code and on the device. The UI/UX brief called it
+  "ServiceHub"; renaming is a separate decision, and the icon has no lettering so it fits
+  either name.

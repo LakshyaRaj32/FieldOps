@@ -38,7 +38,11 @@ npm run mobile:android   # terminal 3: build, install, launch
 
 React Native 0.87 (New Architecture, Hermes) · TypeScript (strict) · React Navigation 7 ·
 Redux Toolkit + RTK Query · react-native-config · MMKV · react-native-keychain · NetInfo ·
-Reanimated 4
+Reanimated 4 · Ionicons (`@react-native-vector-icons/ionicons`) · native date/time pickers
+(`@react-native-community/datetimepicker`)
+
+The UI is built from the design system in `src/theme` and `src/components/ui`; see
+[phase status › UI/UX improvement](../../docs/phase-status.md#uiux-improvement-phase).
 
 ## Layout
 
