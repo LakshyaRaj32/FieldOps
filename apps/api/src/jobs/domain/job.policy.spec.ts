@@ -111,7 +111,11 @@ describe('allowedActions', () => {
   });
 
   it.each([
-    [JobStatus.PENDING, null, ['message', 'assign', 'edit', 'cancel', 'delete']],
+    [
+      JobStatus.PENDING,
+      null,
+      ['message', 'assign', 'edit', 'cancel', 'delete'],
+    ],
     [JobStatus.ASSIGNED, 'worker-a', ['message', 'assign', 'edit', 'cancel']],
     [JobStatus.IN_PROGRESS, 'worker-a', ['message', 'edit', 'cancel']],
     [JobStatus.COMPLETED, 'worker-a', ['message']],

@@ -9,7 +9,10 @@ const fix = {
 
 describe('eventLocation', () => {
   it('computes the distance from the job site on the server, rounded to meters', () => {
-    const location = eventLocation({ latitude: 28.6139, longitude: 77.209 }, fix);
+    const location = eventLocation(
+      { latitude: 28.6139, longitude: 77.209 },
+      fix,
+    );
     expect(location).toEqual({
       latitude: 28.6149,
       longitude: 77.209,

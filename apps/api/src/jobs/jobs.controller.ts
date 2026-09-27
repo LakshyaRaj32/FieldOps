@@ -56,6 +56,7 @@ import {
   JobWorkingSetDto,
 } from './dto/job-response.dto.js';
 import { ListJobsQueryDto } from './dto/list-jobs-query.dto.js';
+import { JobOverviewDto } from './dto/job-overview.dto.js';
 import { UpdateJobDto } from './dto/update-job.dto.js';
 import {
   EVIDENCE_MAX_BYTES,
@@ -147,6 +148,22 @@ export class JobsController {
     @Query() query: ListJobsQueryDto,
   ): Promise<JobPageDto> {
     return this.jobs.list(user, query);
+  }
+
+  // Declared before GET /jobs/:id so "overview" is not taken for a job ID.
+  @Get('overview')
+  @Roles(...rolesWith('job:read:all'))
+  @ApiOperation({
+    summary: 'Dashboard figures across all jobs (MANAGER, ADMIN)',
+    description:
+      'Counts by status, overdue and due-soon open jobs, jobs closed in the last 7 days, ' +
+      'open jobs per worker and the latest job history entries. Time windows are rolling ' +
+      '(from `generatedAt`), so the figures need no time zone.',
+  })
+  @ApiEnvelopeResponse(JobOverviewDto, { description: 'The figures.' })
+  @ApiErrorResponses(UNAUTHENTICATED, FORBIDDEN)
+  overview(@CurrentUser() user: AuthenticatedUser): Promise<JobOverviewDto> {
+    return this.jobs.overview(user);
   }
 
   // Declared before GET /jobs/:id so "working-set" is not taken for a job ID.

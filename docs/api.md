@@ -127,6 +127,7 @@ request by the job policy (`apps/api/src/jobs/domain/job.policy.ts`).
 | `POST` | `/api/v1/jobs/:id/cancel` | MANAGER, ADMIN | `200` the job, `CANCELLED` (optional body `{ reason }`) |
 | `GET` | `/api/v1/users/workers` | MANAGER, ADMIN | `200` active workers to assign |
 | `GET` | `/api/v1/jobs/working-set` | WORKER | `200` `{ jobs, generatedAt }`: the offline snapshot (Phase 3) |
+| `GET` | `/api/v1/jobs/overview` | MANAGER, ADMIN | `200` the manager dashboard's figures (UI/UX phase, [below](#job-overview)) |
 | `POST` | `/api/v1/jobs/:id/notes` | the assigned WORKER | `201` the job with the note (Phase 3) |
 | `POST` | `/api/v1/jobs/:id/evidence` | the assigned WORKER | `201` the job with the photo (multipart; Phase 4, [evidence.md](evidence.md)) |
 | `GET` | `/api/v1/jobs/:id/evidence/:evidenceId/content` | everyone who may see the job | `200` the image bytes (Phase 4) |
@@ -134,6 +135,25 @@ request by the job policy (`apps/api/src/jobs/domain/job.policy.ts`).
 | `GET` | `/api/v1/notifications` | everyone | `200` the caller's inbox `{ items, nextCursor, unreadCount }` (Phase 4, [notifications.md](notifications.md)) |
 | `POST` | `/api/v1/notifications/:id/read`, `/read-all` | everyone | `204` |
 | `PUT` / `DELETE` | `/api/v1/notifications/devices/current` | everyone | `204` register / remove this session's FCM token |
+
+### Job overview
+
+`GET /api/v1/jobs/overview` returns counts computed from every job, so the manager dashboard
+never estimates from a page of results. Read-only; one REPEATABLE READ transaction, so the
+figures agree with each other. Time windows are rolling from `generatedAt` (no time zone).
+
+| Field | Meaning |
+| --- | --- |
+| `statusCounts` | Every job by current status (all five statuses, 0 when empty) |
+| `overdue` | Open jobs (`PENDING`, `ASSIGNED`, `IN_PROGRESS`) scheduled before now |
+| `dueNext24Hours` | Open jobs scheduled in the next 24 hours |
+| `completedLast7Days`, `cancelledLast7Days` | By `completedAt` / `cancelledAt` |
+| `workload` | `{ worker, assigned, inProgress }` for workers with open jobs, busiest first (max 10) |
+| `recentActivity` | The newest job history entries across all jobs, with `jobId` and `jobTitle` (max 10) |
+| `generatedAt` | Server time of the figures |
+
+Workers get `403`. The mobile app validates the payload (`isJobOverview`) and refreshes it
+whenever job lists are refreshed (realtime events, job commands, pull-to-refresh).
 
 **Realtime** (Phase 4): Socket.IO at path `/realtime` on the API origin (not under `/api/v1`),
 WebSocket transport, access token in the handshake. Contract: [realtime.md](realtime.md).

@@ -16,6 +16,7 @@ export type {
   DeviceLocation,
   EvidenceContentType,
   GeoPoint,
+  JobActivity,
   JobChecklistItem,
   JobCommandRequest,
   JobDetail,
@@ -23,6 +24,7 @@ export type {
   JobHistoryEntry,
   JobMessage,
   JobNote,
+  JobOverview,
   JobPage,
   JobSummary,
   JobWorkingSet,
@@ -30,6 +32,7 @@ export type {
   UpdateJobRequest,
   UserSummary,
   WorkerSummary,
+  WorkerWorkload,
 } from './jobs';
 export {
   REALTIME_EVENT,

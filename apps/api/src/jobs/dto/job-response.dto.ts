@@ -243,7 +243,10 @@ export class JobMessageDto implements JobMessage {
   @ApiProperty({ type: UserSummaryDto })
   readonly author: UserSummaryDto;
 
-  @ApiProperty({ format: 'date-time', description: 'Device time (informational).' })
+  @ApiProperty({
+    format: 'date-time',
+    description: 'Device time (informational).',
+  })
   readonly occurredAt: string;
 
   @ApiProperty({ format: 'date-time', description: 'Server receipt time.' })

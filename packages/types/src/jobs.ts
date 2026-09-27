@@ -232,6 +232,44 @@ export interface JobWorkingSet {
   readonly generatedAt: string;
 }
 
+/** A worker's open jobs, for the manager dashboard's workload list. */
+export interface WorkerWorkload {
+  readonly worker: UserSummary;
+  /** Assigned and not started yet. */
+  readonly assigned: number;
+  readonly inProgress: number;
+}
+
+/** A job history entry across all jobs, for the manager dashboard's activity feed. */
+export interface JobActivity extends JobHistoryEntry {
+  readonly jobId: string;
+  readonly jobTitle: string;
+}
+
+/**
+ * GET /api/v1/jobs/overview (managers and admins): the dashboard's figures, computed by the
+ * server from every job, so they are exact however many jobs there are. Time windows are
+ * rolling (the last 24 hours / 7 days from `generatedAt`), so they need no time zone.
+ */
+export interface JobOverview {
+  /** Every job by its current status. */
+  readonly statusCounts: Readonly<Record<JobStatus, number>>;
+  /** Open jobs (unassigned, assigned or in progress) whose scheduled time has passed. */
+  readonly overdue: number;
+  /** Open jobs scheduled within the next 24 hours. */
+  readonly dueNext24Hours: number;
+  /** Jobs completed in the last 7 days. */
+  readonly completedLast7Days: number;
+  /** Jobs cancelled in the last 7 days. */
+  readonly cancelledLast7Days: number;
+  /** Workers with open jobs, busiest first (at most 10). */
+  readonly workload: readonly WorkerWorkload[];
+  /** The latest history entries across all jobs, newest first (at most 10). */
+  readonly recentActivity: readonly JobActivity[];
+  /** ISO 8601 server time the figures were computed. */
+  readonly generatedAt: string;
+}
+
 /** One page of GET /api/v1/jobs. `nextCursor` is null on the last page. */
 export interface JobPage {
   readonly items: readonly JobSummary[];

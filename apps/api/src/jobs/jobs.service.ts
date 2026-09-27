@@ -6,10 +6,7 @@ import { AppException, AuthErrors } from '../common/errors/app-exception.js';
 import { ErrorCode } from '../common/errors/error-codes.js';
 import type { AuthenticatedUser } from '../common/types/authenticated-user.js';
 import { Role } from '../users/role.js';
-import {
-  DomainEvents,
-  type JobChangeKind,
-} from '../events/domain-events.js';
+import { DomainEvents, type JobChangeKind } from '../events/domain-events.js';
 import {
   OBJECT_STORAGE,
   type ObjectStorage,
@@ -53,6 +50,7 @@ import type {
 import type { DeviceLocationDto } from './dto/job-fields.js';
 import type { CreateJobDto } from './dto/create-job.dto.js';
 import type { ListJobsQueryDto } from './dto/list-jobs-query.dto.js';
+import { JobOverviewDto } from './dto/job-overview.dto.js';
 import {
   JobDetailDto,
   JobPageDto,
@@ -213,6 +211,16 @@ export class JobsService {
           ? encodeJobCursor({ scheduledAt: last.scheduledAt, id: last.id })
           : null,
     });
+  }
+
+  /**
+   * The manager dashboard's figures across every job (single organization; see
+   * domain/job.policy.ts on tenancy). Read-only, computed on request.
+   */
+  async overview(user: AuthenticatedUser): Promise<JobOverviewDto> {
+    this.assertPermission(user, 'job:read:all');
+    const now = new Date();
+    return JobOverviewDto.from(await this.jobs.overview(now), now);
   }
 
   /**

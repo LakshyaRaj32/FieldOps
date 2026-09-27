@@ -39,13 +39,22 @@ function exif(orientation: number): Buffer {
   tiff.writeUInt16LE(3, 24);
   tiff.writeUInt32LE(1, 26);
   tiff.writeUInt16LE(orientation, 30);
-  return segment(0xe1, Buffer.concat([Buffer.from('Exif\0\0', 'latin1'), tiff]));
+  return segment(
+    0xe1,
+    Buffer.concat([Buffer.from('Exif\0\0', 'latin1'), tiff]),
+  );
 }
 
 const SOI = Buffer.from([0xff, 0xd8]);
-const JFIF = segment(0xe0, Buffer.from('JFIF\0\x01\x01\0\0\x01\0\x01\0\0', 'latin1'));
+const JFIF = segment(
+  0xe0,
+  Buffer.from('JFIF\0\x01\x01\0\0\x01\0\x01\0\0', 'latin1'),
+);
 const COMMENT = segment(0xfe, Buffer.from('Owner: Asha Verma', 'latin1'));
-const XMP = segment(0xe1, Buffer.from('http://ns.adobe.com/xap/1.0/\0<gps/>', 'latin1'));
+const XMP = segment(
+  0xe1,
+  Buffer.from('http://ns.adobe.com/xap/1.0/\0<gps/>', 'latin1'),
+);
 const SCAN = Buffer.concat([
   segment(0xda, Buffer.from([1, 1, 0, 0, 0x3f, 0])),
   Buffer.from([0x12, 0x34, 0xff, 0x00, 0x56]), // entropy-coded data with a stuffed FF
@@ -108,10 +117,15 @@ describe('inspectImage — JPEG', () => {
       reason: 'malformed',
     });
     expect(
-      inspectImage(Buffer.concat([SOI, sof0(10, 10), Buffer.from([0xff, 0xd9])])),
+      inspectImage(
+        Buffer.concat([SOI, sof0(10, 10), Buffer.from([0xff, 0xd9])]),
+      ),
     ).toEqual({ ok: false, reason: 'malformed' });
     // No frame header: dimensions unknown.
-    expect(inspectImage(jpeg(JFIF))).toEqual({ ok: false, reason: 'malformed' });
+    expect(inspectImage(jpeg(JFIF))).toEqual({
+      ok: false,
+      reason: 'malformed',
+    });
   });
 
   it('rejects images beyond the size limits', () => {
@@ -143,7 +157,9 @@ function ihdr(width: number, height: number): Buffer {
   return chunk('IHDR', data);
 }
 
-const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PNG_SIGNATURE = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
 const IDAT = chunk('IDAT', Buffer.from([1, 2, 3, 4]));
 const IEND = chunk('IEND', Buffer.alloc(0));
 

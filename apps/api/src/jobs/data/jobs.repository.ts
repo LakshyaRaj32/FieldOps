@@ -6,6 +6,13 @@ import {
   type ProcessedMutation,
 } from '../../generated/prisma/client.js';
 import type { EventLocation } from '../domain/job-location.js';
+import {
+  ACTIVITY_LIMIT,
+  DUE_SOON_MS,
+  OPEN_STATUSES,
+  RECENT_CLOSED_MS,
+  type OverviewCounts,
+} from '../domain/job-overview.js';
 import type { JobEventType, JobStatus } from '../job-enums.js';
 import type { JobCursor } from './job-cursor.js';
 
@@ -43,6 +50,25 @@ const detailInclude = {
     include: { author: userSummary },
   },
 } as const satisfies Prisma.JobInclude;
+
+const activityInclude = {
+  actor: userSummary,
+  assignee: userSummary,
+  job: { select: { title: true } },
+} as const satisfies Prisma.JobEventInclude;
+
+export type JobActivityRecord = Prisma.JobEventGetPayload<{
+  include: typeof activityInclude;
+}>;
+
+/** Everything the manager dashboard shows, read in one call (see JobsService.overview). */
+export interface OverviewRecord extends OverviewCounts {
+  readonly overdue: number;
+  readonly dueNext24Hours: number;
+  readonly completedLast7Days: number;
+  readonly cancelledLast7Days: number;
+  readonly recentActivity: JobActivityRecord[];
+}
 
 export type JobSummaryRecord = Prisma.JobGetPayload<{
   include: typeof summaryInclude;
@@ -207,6 +233,106 @@ export class JobsRepository {
     return {
       items: rows.slice(0, filter.limit),
       hasMore: rows.length > filter.limit,
+    };
+  }
+
+  /**
+   * The manager dashboard's figures at `now`: counts only (no job rows), read in one
+   * REPEATABLE READ transaction so they are consistent with each other. The status and
+   * scheduled-time counts use the existing status/scheduled_at indexes; the activity feed
+   * reads the newest job_events rows.
+   */
+  async overview(now: Date): Promise<OverviewRecord> {
+    const open = { in: [...OPEN_STATUSES] };
+    const recentSince = new Date(now.getTime() - RECENT_CLOSED_MS);
+    const [
+      byStatus,
+      overdue,
+      dueNext24Hours,
+      completedLast7Days,
+      cancelledLast7Days,
+      byWorker,
+      recentActivity,
+    ] = await this.prisma.$transaction(
+      [
+        this.prisma.job.groupBy({
+          by: ['status'],
+          orderBy: { status: 'asc' },
+          _count: { _all: true },
+        }),
+        this.prisma.job.count({
+          where: { status: open, scheduledAt: { lt: now } },
+        }),
+        this.prisma.job.count({
+          where: {
+            status: open,
+            scheduledAt: {
+              gte: now,
+              lt: new Date(now.getTime() + DUE_SOON_MS),
+            },
+          },
+        }),
+        this.prisma.job.count({
+          where: { status: 'COMPLETED', completedAt: { gte: recentSince } },
+        }),
+        this.prisma.job.count({
+          where: { status: 'CANCELLED', cancelledAt: { gte: recentSince } },
+        }),
+        this.prisma.job.groupBy({
+          by: ['assignedWorkerId', 'status'],
+          where: {
+            status: { in: ['ASSIGNED', 'IN_PROGRESS'] },
+            assignedWorkerId: { not: null },
+          },
+          orderBy: [{ assignedWorkerId: 'asc' }, { status: 'asc' }],
+          _count: { _all: true },
+        }),
+        this.prisma.jobEvent.findMany({
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: ACTIVITY_LIMIT,
+          include: activityInclude,
+        }),
+      ],
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
+
+    const workerIds = [
+      ...new Set(
+        byWorker.flatMap(row =>
+          row.assignedWorkerId === null ? [] : [row.assignedWorkerId],
+        ),
+      ),
+    ];
+    const workers =
+      workerIds.length === 0
+        ? []
+        : await this.prisma.user.findMany({
+            where: { id: { in: workerIds } },
+            select: userSummary.select,
+          });
+
+    return {
+      byStatus: byStatus.map(row => ({
+        status: row.status,
+        count: row._count._all,
+      })),
+      byWorker: byWorker.flatMap(row =>
+        row.assignedWorkerId === null
+          ? []
+          : [
+              {
+                workerId: row.assignedWorkerId,
+                status: row.status,
+                count: row._count._all,
+              },
+            ],
+      ),
+      workers,
+      overdue,
+      dueNext24Hours,
+      completedLast7Days,
+      cancelledLast7Days,
+      recentActivity,
     };
   }
 
