@@ -8,6 +8,7 @@ import { JobFormScreen } from '../../features/jobs/screens/JobFormScreen';
 import { JobsScreen } from '../../features/jobs/screens/JobsScreen';
 import { useAppSelector } from '../../store/hooks';
 import { selectSessionUser } from '../../store/slices/sessionSlice';
+import { useTheme } from '../../theme';
 import { renderScreenLayout } from './ScreenLayout';
 import type { JobsStackParamList } from './types';
 
@@ -15,11 +16,16 @@ const Stack = createNativeStackNavigator<JobsStackParamList>();
 
 /** The Jobs tab: list → details → (managers) create, edit and assign. */
 export function JobsNavigator(): React.JSX.Element {
+  const theme = useTheme();
   const role = useAppSelector(selectSessionUser)?.role;
   return (
     <Stack.Navigator
       screenLayout={renderScreenLayout}
-      screenOptions={{ headerTitleStyle: { fontSize: 18, fontWeight: '700' } }}
+      screenOptions={{
+        headerTitleStyle: { fontSize: 18, fontWeight: '700' },
+        headerShadowVisible: false,
+        headerStyle: { backgroundColor: theme.colors.surface },
+      }}
     >
       <Stack.Screen
         name="JobList"

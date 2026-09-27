@@ -5,6 +5,7 @@ import {
   JobPriority,
   JobStatus,
   type JobDetail,
+  type JobOverview,
   type JobPage,
   type JobSummary,
   type JobWorkingSet,
@@ -234,4 +235,47 @@ function isWorkerSummary(value: unknown): value is WorkerSummary {
 
 export function isWorkerList(value: unknown): value is WorkerSummary[] {
   return isArrayOf(value, isWorkerSummary);
+}
+
+function isActivity(value: unknown): boolean {
+  if (!isHistoryEntry(value) || !isRecord(value)) {
+    return false;
+  }
+  const { jobId, jobTitle } = value;
+  return isString(jobId) && isString(jobTitle);
+}
+
+function isWorkload(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const { worker, assigned, inProgress } = value;
+  return isUserSummary(worker) && isNumber(assigned) && isNumber(inProgress);
+}
+
+/** The manager dashboard's figures (GET /jobs/overview). */
+export function isJobOverview(value: unknown): value is JobOverview {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const {
+    statusCounts,
+    overdue,
+    dueNext24Hours,
+    completedLast7Days,
+    cancelledLast7Days,
+    workload,
+    recentActivity,
+    generatedAt,
+  } = value;
+  return (
+    isRecord(statusCounts) &&
+    Object.values(JobStatus).every(status => isNumber(statusCounts[status])) &&
+    [overdue, dueNext24Hours, completedLast7Days, cancelledLast7Days].every(
+      isNumber,
+    ) &&
+    isArrayOf(workload, isWorkload) &&
+    isArrayOf(recentActivity, isActivity) &&
+    isString(generatedAt)
+  );
 }

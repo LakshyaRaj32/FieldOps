@@ -12,8 +12,10 @@ import type { FieldErrors } from '../auth/validation';
  * The manager's job form: field values as typed, client-side checks that mirror the API's
  * rules (the server stays the authority) and conversion to API requests. Pure functions.
  *
- * The schedule is entered as a date (YYYY-MM-DD) and a 24-hour time (HH:MM) in the device's
- * time zone and sent as an ISO timestamp, so no native date-picker dependency is needed.
+ * The schedule is chosen with the native date and time pickers (components/common/
+ * DateTimeField) and kept here as a date (YYYY-MM-DD) and a 24-hour time (HH:MM) in the
+ * device's time zone, then sent as an ISO timestamp. Keeping the two parts as text keeps
+ * these rules pure and lets the date and the time be changed independently.
  */
 
 export const LIMITS = {

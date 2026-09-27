@@ -1,7 +1,7 @@
 import React from 'react';
 
 import { InfoRow } from '../../../components/common/InfoRow';
-import { AppText, Button, Card } from '../../../components/ui';
+import { Button, Card, SectionTitle } from '../../../components/ui';
 import { useOfflineJobs, useProblemEntries } from '../data/OfflineJobsContext';
 import { formatSchedule } from '../presentation';
 import { SyncProblemList } from './SyncProblemList';
@@ -26,9 +26,7 @@ export function SyncCard(): React.JSX.Element | null {
   const { status, store, engine } = offline;
   return (
     <Card>
-      <AppText variant="label" tone="muted">
-        Offline sync
-      </AppText>
+      <SectionTitle title="Offline sync" icon="sync-outline" />
       <InfoRow label="Status" value={PHASES[status.phase]} />
       <InfoRow
         label="Last synced"

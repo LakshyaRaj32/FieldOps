@@ -249,7 +249,9 @@ export function WorkerJobDetail({
       }
       if (saved.sizeBytes > EVIDENCE_MAX_BYTES) {
         evidenceFiles.remove(saved.uri).catch(() => undefined);
-        setPhotoNotice('The photo is larger than 10 MB and cannot be attached.');
+        setPhotoNotice(
+          'The photo is larger than 10 MB and cannot be attached.',
+        );
         return;
       }
       perform(() =>
@@ -339,6 +341,7 @@ export function WorkerJobDetail({
             <View style={[styles.row, { gap: theme.spacing.sm }]}>
               <Button
                 label="Take photo"
+                icon="camera-outline"
                 variant="secondary"
                 loading={capturing}
                 onPress={() => {
@@ -347,6 +350,7 @@ export function WorkerJobDetail({
               />
               <Button
                 label="Choose photo"
+                icon="images-outline"
                 variant="secondary"
                 disabled={capturing}
                 onPress={() => {
@@ -385,7 +389,12 @@ export function WorkerJobDetail({
                 textAlignVertical="top"
                 placeholder="What did you find or do?"
               />
-              <Button label="Save note" variant="secondary" onPress={addNote} />
+              <Button
+                label="Save note"
+                icon="save-outline"
+                variant="secondary"
+                onPress={addNote}
+              />
             </View>
           ) : undefined
         }

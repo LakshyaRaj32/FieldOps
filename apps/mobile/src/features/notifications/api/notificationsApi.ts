@@ -47,6 +47,29 @@ export function isNotificationPage(value: unknown): value is NotificationPage {
 
 const INBOX = { type: 'Notification', id: 'INBOX' } as const;
 
+/** Marks one entry (or every entry, with `null`) read in a cached page. Pure. */
+export function markReadInPage(
+  page: NotificationPage,
+  id: string | null,
+  readAt: string,
+): NotificationPage {
+  let marked = 0;
+  const items = page.items.map(item => {
+    if (item.readAt !== null || (id !== null && item.id !== id)) {
+      return item;
+    }
+    marked += 1;
+    return { ...item, readAt };
+  });
+  return marked === 0
+    ? page
+    : {
+        ...page,
+        items,
+        unreadCount: id === null ? 0 : Math.max(0, page.unreadCount - marked),
+      };
+}
+
 export const notificationsApi = baseApi
   .enhanceEndpoints({ addTagTypes: ['Notification'] })
   .injectEndpoints({
@@ -65,11 +88,27 @@ export const notificationsApi = baseApi
         providesTags: [INBOX],
       }),
 
+      /*
+       * Marking read changes only the read state. The cached inbox is updated at once
+       * (entries stay where they are, the unread badge drops), the request follows, and a
+       * failure puts the previous state back. The refetch afterwards (the tag) brings in the
+       * server's own timestamps.
+       */
       markNotificationRead: build.mutation<null, string>({
         query: id => ({
           url: `${API_V1}/notifications/${id}/read`,
           method: 'POST',
         }),
+        onQueryStarted: async (id, { dispatch, queryFulfilled }) => {
+          const patch = dispatch(
+            notificationsApi.util.updateQueryData(
+              'getNotifications',
+              undefined,
+              page => markReadInPage(page, id, new Date().toISOString()),
+            ),
+          );
+          await queryFulfilled.catch(() => patch.undo());
+        },
         invalidatesTags: [INBOX],
       }),
 
@@ -78,6 +117,16 @@ export const notificationsApi = baseApi
           url: `${API_V1}/notifications/read-all`,
           method: 'POST',
         }),
+        onQueryStarted: async (_arg, { dispatch, queryFulfilled }) => {
+          const patch = dispatch(
+            notificationsApi.util.updateQueryData(
+              'getNotifications',
+              undefined,
+              page => markReadInPage(page, null, new Date().toISOString()),
+            ),
+          );
+          await queryFulfilled.catch(() => patch.undo());
+        },
         invalidatesTags: [INBOX],
       }),
 

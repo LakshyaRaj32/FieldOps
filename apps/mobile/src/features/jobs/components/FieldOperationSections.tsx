@@ -8,12 +8,15 @@ import {
 } from 'react-native';
 import type { JobDetail } from '@fieldops/types';
 
+import { ImageViewer } from '../../../components/common/ImageViewer';
 import { InfoRow } from '../../../components/common/InfoRow';
 import {
   AppText,
   Badge,
   Button,
   Card,
+  Icon,
+  SectionTitle,
   type BadgeTone,
 } from '../../../components/ui';
 import { openInMaps } from '../../../services/location/locationService';
@@ -42,20 +45,19 @@ export function JobSiteCard({
   const { location } = job;
   return (
     <Card>
-      <AppText variant="label" tone="muted">
-        Job site
-      </AppText>
+      <SectionTitle title="Job site" icon="location-outline" />
       <InfoRow label="Address" value={job.address} />
       {location !== null ? (
         <View style={{ gap: theme.spacing.sm }}>
           <InfoRow
             label="Coordinates"
-            value={`${location.latitude.toFixed(5)}, ${location.longitude.toFixed(
+            value={`${location.latitude.toFixed(
               5,
-            )}`}
+            )}, ${location.longitude.toFixed(5)}`}
           />
           <Button
             label="Open in maps"
+            icon="map-outline"
             variant="secondary"
             onPress={() => openInMaps(location, job.title)}
           />
@@ -82,9 +84,7 @@ export function JobVisitLocations({
   }
   return (
     <Card>
-      <AppText variant="label" tone="muted">
-        Visit
-      </AppText>
+      <SectionTitle title="Visit" icon="navigate-outline" />
       {startLocation !== null ? (
         <InfoRow
           label={`Started · ${formatSchedule(startLocation.capturedAt)}`}
@@ -98,7 +98,8 @@ export function JobVisitLocations({
         />
       ) : null}
       <AppText variant="caption" tone="muted">
-        Positions come from the worker's phone and can be off by the accuracy shown.
+        Positions come from the worker's phone and can be off by the accuracy
+        shown.
       </AppText>
     </Card>
   );
@@ -111,8 +112,18 @@ export interface GalleryItem {
   readonly badge?: { readonly label: string; readonly tone: BadgeTone };
 }
 
-/** One photo tile; a failed load (offline, expired session) can be retried by tapping. */
-function EvidenceTile({ item }: { readonly item: GalleryItem }) {
+/**
+ * One photo tile. Tapping a loaded photo opens it full screen (the same source: nothing is
+ * downloaded or uploaded again); a failed load (offline, expired session) is retried by
+ * tapping instead.
+ */
+function EvidenceTile({
+  item,
+  onOpen,
+}: {
+  readonly item: GalleryItem;
+  readonly onOpen: (item: GalleryItem) => void;
+}) {
   const theme = useTheme();
   const [attempt, setAttempt] = useState(0);
   const [failed, setFailed] = useState(false);
@@ -128,26 +139,54 @@ function EvidenceTile({ item }: { readonly item: GalleryItem }) {
       {item.source === null || failed ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Load photo again"
+          accessibilityLabel={
+            item.source === null
+              ? 'Photo not on this phone'
+              : 'Load photo again'
+          }
+          disabled={item.source === null}
           onPress={() => {
             setFailed(false);
             setAttempt(value => value + 1);
           }}
-          style={[tileStyle, styles.placeholder]}
+          style={[tileStyle, styles.placeholder, { gap: theme.spacing.xs }]}
         >
-          <AppText variant="caption" tone="muted">
+          <Icon
+            name={item.source === null ? 'image-outline' : 'refresh'}
+            tone="muted"
+          />
+          <AppText variant="caption" tone="muted" style={styles.centered}>
             {item.source === null ? 'Not on this phone' : 'Tap to load'}
           </AppText>
         </Pressable>
       ) : (
-        <Image
-          key={attempt}
-          source={item.source}
-          style={tileStyle}
-          resizeMode="cover"
-          accessibilityLabel={item.caption}
-          onError={() => setFailed(true)}
-        />
+        <Pressable
+          accessibilityRole="imagebutton"
+          accessibilityLabel={`Photo, ${item.caption}`}
+          accessibilityHint="Opens the photo full screen"
+          onPress={() => onOpen(item)}
+          style={({ pressed }) => [pressed && styles.pressed]}
+        >
+          <Image
+            key={attempt}
+            source={item.source}
+            style={tileStyle}
+            resizeMode="cover"
+            onError={() => setFailed(true)}
+          />
+          <View
+            style={[
+              styles.zoomBadge,
+              theme.elevation.raised,
+              {
+                backgroundColor: theme.colors.overlay,
+                borderRadius: theme.radii.pill,
+              },
+            ]}
+          >
+            <Icon name="expand-outline" size="sm" color="#FFFFFF" />
+          </View>
+        </Pressable>
       )}
       <AppText variant="caption" tone="muted" numberOfLines={1}>
         {item.caption}
@@ -170,14 +209,23 @@ export function EvidenceGallery({
   readonly notice?: string;
 }): React.JSX.Element | null {
   const theme = useTheme();
+  const [opened, setOpened] = useState<GalleryItem | null>(null);
   if (items.length === 0 && actions === undefined) {
     return null;
   }
   return (
     <Card>
-      <AppText variant="label" tone="muted">
-        Photos
-      </AppText>
+      <SectionTitle
+        title="Photos"
+        icon="images-outline"
+        {...(items.length > 0 && {
+          accessory: (
+            <AppText variant="caption" tone="muted">
+              {items.length}
+            </AppText>
+          ),
+        })}
+      />
       {actions}
       {notice !== undefined ? (
         <AppText tone="danger" accessibilityRole="alert">
@@ -191,10 +239,16 @@ export function EvidenceGallery({
       ) : (
         <View style={[styles.grid, { gap: theme.spacing.md }]}>
           {items.map(item => (
-            <EvidenceTile key={item.id} item={item} />
+            <EvidenceTile key={item.id} item={item} onOpen={setOpened} />
           ))}
         </View>
       )}
+      <ImageViewer
+        visible={opened !== null}
+        source={opened?.source ?? null}
+        caption={opened?.caption ?? ''}
+        onClose={() => setOpened(null)}
+      />
     </Card>
   );
 }
@@ -215,9 +269,7 @@ export function JobMessages({
   }
   return (
     <Card>
-      <AppText variant="label" tone="muted">
-        Messages
-      </AppText>
+      <SectionTitle title="Messages" icon="chatbubbles-outline" />
       {job.messages.length === 0 ? (
         <AppText variant="caption" tone="muted">
           No messages yet. Messages here reach the job's worker and managers.
@@ -242,4 +294,15 @@ const styles = StyleSheet.create({
   tileWrap: { width: 96 },
   tile: { width: 96, height: 96 },
   placeholder: { alignItems: 'center', justifyContent: 'center', padding: 4 },
+  centered: { textAlign: 'center' },
+  pressed: { opacity: 0.85 },
+  zoomBadge: {
+    position: 'absolute',
+    right: 6,
+    bottom: 6,
+    width: 26,
+    height: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

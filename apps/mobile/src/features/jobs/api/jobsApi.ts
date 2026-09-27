@@ -6,6 +6,7 @@ import type {
   EvidenceContentType,
   JobCommandRequest,
   JobDetail,
+  JobOverview,
   JobPage,
   JobStatus,
   JobWorkingSet,
@@ -20,6 +21,7 @@ import { API_V1, baseApi } from '../../../services/api/baseApi';
 import { parseError, type AppError } from '../../../utils/errors';
 import {
   isJobDetail,
+  isJobOverview,
   isJobPage,
   isJobWorkingSet,
   isWorkerList,
@@ -146,6 +148,21 @@ export const jobsApi = baseApi
           providesTags: [LIST],
         }),
 
+        /**
+         * The manager dashboard's figures. Tagged like the lists, so everything that
+         * refreshes the job lists (job commands, realtime events) refreshes it too.
+         */
+        getJobOverview: build.query<JobOverview, void>({
+          queryFn: (_arg, _api, _extra, send) =>
+            fetchChecked(
+              send,
+              `${API_V1}/jobs/overview`,
+              isJobOverview,
+              'job overview',
+            ),
+          providesTags: [LIST],
+        }),
+
         getJob: build.query<JobDetail, string>({
           queryFn: (id, _api, _extra, send) =>
             fetchChecked(send, `${API_V1}/jobs/${id}`, isJobDetail, 'job'),
@@ -224,7 +241,14 @@ export const jobsApi = baseApi
 
         uploadJobEvidence: build.mutation<JobDetail, EvidenceUploadArgs>({
           queryFn: (
-            { id, idempotencyKey, evidenceId, fileUri, contentType, capturedAt },
+            {
+              id,
+              idempotencyKey,
+              evidenceId,
+              fileUri,
+              contentType,
+              capturedAt,
+            },
             _api,
             _extra,
             send,
@@ -235,7 +259,9 @@ export const jobsApi = baseApi
             // React Native's FormData streams the file from its URI.
             form.append('file', {
               uri: fileUri,
-              name: `${evidenceId}.${contentType === 'image/png' ? 'png' : 'jpg'}`,
+              name: `${evidenceId}.${
+                contentType === 'image/png' ? 'png' : 'jpg'
+              }`,
               type: contentType,
             } as unknown as Blob);
             return fetchChecked(
@@ -321,6 +347,7 @@ export const jobsApi = baseApi
 export const {
   useListJobsInfiniteQuery,
   useGetJobQuery,
+  useGetJobOverviewQuery,
   useCreateJobMutation,
   useUpdateJobMutation,
   useDeleteJobMutation,

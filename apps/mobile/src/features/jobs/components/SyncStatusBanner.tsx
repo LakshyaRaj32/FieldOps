@@ -1,6 +1,7 @@
 import React from 'react';
+import { StyleSheet, View } from 'react-native';
 
-import { AppText } from '../../../components/ui';
+import { AppText, Icon, type IconName } from '../../../components/ui';
 import { useTheme, type AppTheme } from '../../../theme';
 import {
   useOfflineJobs,
@@ -25,6 +26,11 @@ function colors(theme: AppTheme, tone: SyncBanner['tone']) {
         background: theme.colors.primaryMuted,
         text: theme.colors.primary,
       };
+    case 'info':
+      return {
+        background: theme.colors.infoMuted,
+        text: theme.colors.info,
+      };
     case 'success':
       return {
         background: theme.colors.successMuted,
@@ -37,6 +43,15 @@ function colors(theme: AppTheme, tone: SyncBanner['tone']) {
       };
   }
 }
+
+const ICONS: Readonly<Record<SyncBanner['tone'], IconName>> = {
+  danger: 'alert-circle-outline',
+  warning: 'cloud-offline-outline',
+  primary: 'sync-outline',
+  info: 'information-circle-outline',
+  success: 'checkmark-circle-outline',
+  neutral: 'time-outline',
+};
 
 /**
  * The worker's global sync state, below the connectivity banner on every screen: unsynced
@@ -58,17 +73,27 @@ export function SyncStatusBanner(): React.JSX.Element | null {
   }
   const { background, text } = colors(theme, banner.tone);
   return (
-    <AppText
-      variant="caption"
+    <View
       accessibilityLiveRegion="polite"
-      style={{
-        backgroundColor: background,
-        color: text,
-        paddingHorizontal: theme.spacing.lg,
-        paddingVertical: theme.spacing.xs,
-      }}
+      style={[
+        styles.row,
+        {
+          backgroundColor: background,
+          paddingHorizontal: theme.spacing.lg,
+          paddingVertical: theme.spacing.xs + 2,
+          gap: theme.spacing.sm,
+        },
+      ]}
     >
-      {banner.message}
-    </AppText>
+      <Icon name={ICONS[banner.tone]} size="sm" color={text} />
+      <AppText variant="caption" style={[styles.message, { color: text }]}>
+        {banner.message}
+      </AppText>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'center' },
+  message: { flex: 1 },
+});

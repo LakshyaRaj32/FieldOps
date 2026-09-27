@@ -9,7 +9,8 @@ export type TextTone =
   | 'primary'
   | 'danger'
   | 'warning'
-  | 'success';
+  | 'success'
+  | 'info';
 
 export interface AppTextProps extends TextProps {
   readonly variant?: TypographyVariant;
@@ -30,6 +31,8 @@ function toneColor(theme: AppTheme, tone: TextTone): string {
       return theme.colors.warning;
     case 'success':
       return theme.colors.success;
+    case 'info':
+      return theme.colors.info;
   }
 }
 

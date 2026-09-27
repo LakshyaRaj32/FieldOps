@@ -49,6 +49,7 @@ export function MessageComposer({
       />
       <Button
         label="Send message"
+        icon="send-outline"
         variant="secondary"
         loading={busy}
         onPress={send}

@@ -4,11 +4,17 @@ import Animated, { FadeInUp, FadeOutUp } from 'react-native-reanimated';
 
 import { useConnectivity } from '../../hooks/useConnectivity';
 import { useTheme, type AppTheme } from '../../theme';
-import { AppText } from '../ui';
+import { AppText, Icon, type IconName } from '../ui';
 
 type BannerKind = 'offline' | 'reconnecting' | 'restored';
 
 const RESTORED_VISIBLE_MS = 2500;
+
+const ICONS: Readonly<Record<BannerKind, IconName>> = {
+  offline: 'cloud-offline-outline',
+  reconnecting: 'sync-outline',
+  restored: 'checkmark-circle-outline',
+};
 
 const MESSAGES: Readonly<Record<BannerKind, string>> = {
   offline: "You're offline. Some features are unavailable until you reconnect.",
@@ -86,12 +92,17 @@ export function ConnectivityBanner(): React.JSX.Element | null {
       exiting={FadeOutUp.duration(200)}
       accessibilityRole="alert"
       accessibilityLiveRegion="polite"
-      style={{
-        backgroundColor: colors.background,
-        paddingHorizontal: theme.spacing.lg,
-        paddingVertical: theme.spacing.sm,
-      }}
+      style={[
+        styles.row,
+        {
+          backgroundColor: colors.background,
+          paddingHorizontal: theme.spacing.lg,
+          paddingVertical: theme.spacing.sm,
+          gap: theme.spacing.sm,
+        },
+      ]}
     >
+      <Icon name={ICONS[kind]} size="sm" color={colors.text} />
       <AppText
         variant="caption"
         style={[styles.message, { color: colors.text }]}
@@ -103,5 +114,6 @@ export function ConnectivityBanner(): React.JSX.Element | null {
 }
 
 const styles = StyleSheet.create({
-  message: { fontWeight: '600' },
+  row: { flexDirection: 'row', alignItems: 'center' },
+  message: { flex: 1, fontWeight: '600' },
 });

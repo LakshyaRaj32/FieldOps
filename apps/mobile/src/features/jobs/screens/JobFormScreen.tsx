@@ -1,19 +1,22 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { skipToken } from '@reduxjs/toolkit/query/react';
 import { JobPriority, type JobDetail } from '@fieldops/types';
 
 import type { JobsScreenProps } from '../../../app/navigation/types';
+import { DateTimeField } from '../../../components/common/DateTimeField';
 import { ErrorState } from '../../../components/common/ErrorState';
 import { LoadingState } from '../../../components/common/LoadingState';
 import {
-  AppText,
   Button,
   Card,
+  FieldLabel,
   Screen,
+  SectionTitle,
   SegmentedControl,
   TextField,
   type SegmentedOption,
+  type TextFieldHandle,
 } from '../../../components/ui';
 import { useTheme } from '../../../theme';
 import { fieldError, toAppError, type AppError } from '../../../utils/errors';
@@ -25,7 +28,10 @@ import {
 import {
   canEditChecklist,
   emptyJobForm,
+  formatDateInput,
+  formatTimeInput,
   jobToForm,
+  parseSchedule,
   toCreateJobRequest,
   toUpdateJobRequest,
   validateJobForm,
@@ -105,6 +111,10 @@ function JobFormContent({
   const [updateJob, updateState] = useUpdateJobMutation();
   const saving = createState.isLoading || updateState.isLoading;
   const checklistEditable = job === undefined || canEditChecklist(job.status);
+  const customerRef = useRef<TextFieldHandle>(null);
+  const addressRef = useRef<TextFieldHandle>(null);
+  // The pickers start from the form's schedule; the form keeps it as date and time text.
+  const scheduled = parseSchedule(form.date, form.time) ?? new Date();
 
   const update = (field: keyof JobForm) => (value: string) => {
     setForm(current => ({ ...current, [field]: value }));
@@ -148,6 +158,7 @@ function JobFormContent({
   return (
     <Screen>
       <Card>
+        <SectionTitle title="Job" icon="briefcase-outline" />
         <TextField
           label="Title"
           value={form.title}
@@ -155,16 +166,22 @@ function JobFormContent({
           error={errorFor('title')}
           placeholder="AC repair"
           editable={!saving}
+          returnKeyType="next"
+          onSubmitEditing={() => customerRef.current?.focus()}
         />
         <TextField
+          ref={customerRef}
           label="Customer"
           value={form.customerName}
           onChangeText={update('customerName')}
           error={errorFor('customerName')}
           placeholder="ABC Ltd"
           editable={!saving}
+          returnKeyType="next"
+          onSubmitEditing={() => addressRef.current?.focus()}
         />
         <TextField
+          ref={addressRef}
           label="Address"
           value={form.address}
           onChangeText={update('address')}
@@ -173,34 +190,34 @@ function JobFormContent({
           multiline
           editable={!saving}
         />
+      </Card>
+
+      <Card>
+        <SectionTitle title="Schedule" icon="calendar-outline" />
         <View style={[styles.row, { gap: theme.spacing.md }]}>
           <View style={styles.fill}>
-            <TextField
+            <DateTimeField
               label="Date"
-              value={form.date}
-              onChangeText={update('date')}
+              mode="date"
+              value={scheduled}
+              onChange={date => update('date')(formatDateInput(date))}
               error={errorFor('date', 'scheduledAt')}
-              placeholder="YYYY-MM-DD"
-              keyboardType="numbers-and-punctuation"
-              editable={!saving}
+              disabled={saving}
             />
           </View>
           <View style={styles.fill}>
-            <TextField
-              label="Time (24h)"
-              value={form.time}
-              onChangeText={update('time')}
+            <DateTimeField
+              label="Time"
+              mode="time"
+              value={scheduled}
+              onChange={time => update('time')(formatTimeInput(time))}
               error={errorFor('time')}
-              placeholder="HH:MM"
-              keyboardType="numbers-and-punctuation"
-              editable={!saving}
+              disabled={saving}
             />
           </View>
         </View>
-        <View style={{ gap: theme.spacing.xs }}>
-          <AppText variant="label" tone="muted">
-            Priority
-          </AppText>
+        <View style={{ gap: theme.spacing.xs + 2 }}>
+          <FieldLabel label="Priority" />
           <SegmentedControl
             accessibilityLabel="Priority"
             options={PRIORITY_OPTIONS}
@@ -213,13 +230,13 @@ function JobFormContent({
       </Card>
 
       <Card>
+        <SectionTitle title="Instructions" icon="document-text-outline" />
         <TextField
           label="Description (optional)"
           value={form.description}
           onChangeText={update('description')}
           error={errorFor('description')}
           multiline
-          textAlignVertical="top"
           editable={!saving}
         />
         <TextField
@@ -228,23 +245,21 @@ function JobFormContent({
           onChangeText={update('notes')}
           error={errorFor('notes')}
           multiline
-          textAlignVertical="top"
           editable={!saving}
         />
         <TextField
-          label="Checklist (one item per line, optional)"
+          label="Checklist (optional)"
           value={form.checklist}
           onChangeText={update('checklist')}
           error={errorFor('checklist')}
+          hint={
+            checklistEditable
+              ? 'One item per line.'
+              : "The checklist can't be changed after the job has started."
+          }
           multiline
-          textAlignVertical="top"
           editable={!saving && checklistEditable}
         />
-        {!checklistEditable ? (
-          <AppText variant="caption" tone="muted">
-            The checklist can't be changed after the job has started.
-          </AppText>
-        ) : null}
       </Card>
 
       {serverError !== undefined ? (
@@ -258,6 +273,7 @@ function JobFormContent({
 
       <Button
         label={job === undefined ? 'Create job' : 'Save changes'}
+        icon={job === undefined ? 'add-circle-outline' : 'checkmark'}
         onPress={() => {
           submit().catch(() => undefined);
         }}

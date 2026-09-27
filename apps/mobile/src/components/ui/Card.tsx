@@ -4,12 +4,18 @@ import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useTheme } from '../../theme';
 
 export interface CardProps {
+  /**
+   * `md` (12) for dense content such as list rows and metric tiles; `lg` (16, the default)
+   * for sections of a screen.
+   */
+  readonly padding?: 'md' | 'lg';
   readonly style?: StyleProp<ViewStyle>;
 }
 
-/** A bordered surface for grouping related content. */
+/** A raised surface for grouping related content: a hairline border plus a soft shadow. */
 export function Card({
   children,
+  padding = 'lg',
   style,
 }: PropsWithChildren<CardProps>): React.JSX.Element {
   const theme = useTheme();
@@ -17,11 +23,12 @@ export function Card({
     <View
       style={[
         styles.card,
+        theme.elevation.card,
         {
           backgroundColor: theme.colors.surface,
           borderColor: theme.colors.border,
           borderRadius: theme.radii.lg,
-          padding: theme.spacing.lg,
+          padding: theme.spacing[padding],
           gap: theme.spacing.md,
         },
         style,
@@ -33,5 +40,5 @@ export function Card({
 }
 
 const styles = StyleSheet.create({
-  card: { borderWidth: 1 },
+  card: { borderWidth: StyleSheet.hairlineWidth },
 });

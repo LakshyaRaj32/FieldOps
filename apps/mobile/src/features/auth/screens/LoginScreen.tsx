@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Image, StyleSheet, View } from 'react-native';
 
 import { getConfig } from '../../../app/config';
 import type { AuthScreenProps } from '../../../app/navigation/types';
@@ -9,6 +9,7 @@ import {
   Badge,
   Button,
   Card,
+  Icon,
   Screen,
   TextField,
   type TextFieldHandle,
@@ -71,17 +72,41 @@ export function LoginScreen({
       edges={['top', 'bottom', 'left', 'right']}
       contentStyle={styles.centered}
     >
-      <View style={{ gap: theme.spacing.sm, marginBottom: theme.spacing.md }}>
-        <AppText variant="display">FieldOps</AppText>
-        <AppText tone="muted">
-          Field work that keeps going when the network doesn't.
-        </AppText>
+      <View style={{ gap: theme.spacing.md, marginBottom: theme.spacing.sm }}>
+        <Image
+          source={BRAND_MARK}
+          style={[styles.brand, { borderRadius: theme.radii.lg }]}
+          accessibilityIgnoresInvertColors
+          accessible={false}
+        />
+        <View style={{ gap: theme.spacing.xs }}>
+          <AppText variant="display" accessibilityRole="header">
+            FieldOps
+          </AppText>
+          <AppText tone="muted">
+            Field work that keeps going when the network doesn't.
+          </AppText>
+        </View>
       </View>
 
       {signedOutReason === 'sessionEnded' && serverError === undefined ? (
-        <AppText tone="warning" accessibilityRole="alert">
-          Your session has ended. Please sign in again.
-        </AppText>
+        <View
+          accessibilityRole="alert"
+          style={[
+            styles.notice,
+            {
+              gap: theme.spacing.sm,
+              padding: theme.spacing.md,
+              borderRadius: theme.radii.md,
+              backgroundColor: theme.colors.warningMuted,
+            },
+          ]}
+        >
+          <Icon name="time-outline" tone="warning" />
+          <AppText tone="warning" style={styles.noticeText}>
+            Your session has ended. Please sign in again.
+          </AppText>
+        </View>
       ) : null}
 
       <Card>
@@ -119,7 +144,12 @@ export function LoginScreen({
           <ErrorState title="Couldn't sign in" error={serverError} />
         ) : null}
 
-        <Button label="Sign in" onPress={submit} loading={isLoading} />
+        <Button
+          label="Sign in"
+          icon="log-in-outline"
+          onPress={submit}
+          loading={isLoading}
+        />
         <Button
           label="Create an account"
           variant="ghost"
@@ -135,6 +165,12 @@ export function LoginScreen({
   );
 }
 
+// The launcher icon's artwork (rendered by scripts/render-app-icon.py).
+const BRAND_MARK = require('../../../assets/brand-mark.png');
+
 const styles = StyleSheet.create({
   centered: { justifyContent: 'center' },
+  brand: { width: 56, height: 56 },
+  notice: { flexDirection: 'row', alignItems: 'center' },
+  noticeText: { flex: 1 },
 });

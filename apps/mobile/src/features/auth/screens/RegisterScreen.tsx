@@ -146,7 +146,12 @@ export function RegisterScreen({
           <ErrorState title="Couldn't create the account" error={serverError} />
         ) : null}
 
-        <Button label="Create account" onPress={submit} loading={isLoading} />
+        <Button
+          label="Create account"
+          icon="person-add-outline"
+          onPress={submit}
+          loading={isLoading}
+        />
         <Button
           label="I already have an account"
           variant="ghost"

@@ -77,6 +77,7 @@ export function JobsScreen({
       {isManager ? (
         <Button
           label="New job"
+          icon="add-circle-outline"
           onPress={() => navigation.navigate('JobForm')}
         />
       ) : null}
@@ -122,7 +123,15 @@ function WorkerJobList({ view, header, onOpen }: ListProps): React.JSX.Element {
     empty = <LoadingState message="Getting your jobs…" />;
   } else {
     const [title, description] = EMPTY.worker[view];
-    empty = <EmptyState title={title} description={description} />;
+    empty = (
+      <EmptyState
+        icon={
+          view === 'active' ? 'briefcase-outline' : 'checkmark-done-outline'
+        }
+        title={title}
+        description={description}
+      />
+    );
   }
 
   return (
@@ -184,7 +193,15 @@ function ManagerJobList({
     );
   } else {
     const [title, description] = EMPTY.manager[view];
-    empty = <EmptyState title={title} description={description} />;
+    empty = (
+      <EmptyState
+        icon={
+          view === 'active' ? 'briefcase-outline' : 'checkmark-done-outline'
+        }
+        title={title}
+        description={description}
+      />
+    );
   }
 
   return (

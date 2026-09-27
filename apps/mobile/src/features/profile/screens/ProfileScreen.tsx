@@ -10,6 +10,7 @@ import {
   Screen,
   SegmentedControl,
   type SegmentedOption,
+  SectionTitle,
 } from '../../../components/ui';
 import { useAppDispatch, useAppSelector } from '../../../store/hooks';
 import { selectSessionUser } from '../../../store/slices/sessionSlice';
@@ -72,9 +73,7 @@ export function ProfileScreen(
     <Screen>
       {user !== null ? (
         <Card>
-          <AppText variant="label" tone="muted">
-            Account
-          </AppText>
+          <SectionTitle title="Account" icon="person-outline" />
           <AppText variant="heading">
             {user.firstName} {user.lastName}
           </AppText>
@@ -88,9 +87,7 @@ export function ProfileScreen(
       ) : null}
 
       <Card>
-        <AppText variant="label" tone="muted">
-          Appearance
-        </AppText>
+        <SectionTitle title="Appearance" icon="color-palette-outline" />
         <SegmentedControl
           accessibilityLabel="Theme"
           options={THEME_OPTIONS}
@@ -107,6 +104,7 @@ export function ProfileScreen(
 
       <Button
         label="Sign out"
+        icon="log-out-outline"
         variant="danger"
         loading={signingOut}
         onPress={handleSignOut}

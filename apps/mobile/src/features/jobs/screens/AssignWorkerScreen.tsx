@@ -61,6 +61,7 @@ export function AssignWorkerScreen({
   } else {
     empty = (
       <EmptyState
+        icon="people-outline"
         title="No workers yet"
         description="Workers appear here once they have an active FieldOps account."
       />
@@ -111,7 +112,7 @@ export function AssignWorkerScreen({
               {assigningTo === item.id ? (
                 <Badge label="Assigning…" tone="primary" />
               ) : item.id === currentId ? (
-                <Badge label="Current" tone="success" />
+                <Badge label="Current" tone="success" icon="checkmark" />
               ) : null}
             </Card>
           </Pressable>

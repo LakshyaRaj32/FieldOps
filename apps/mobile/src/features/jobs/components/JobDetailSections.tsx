@@ -1,6 +1,6 @@
 import React from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
-import type { JobDetail } from '@fieldops/types';
+import { JobAction, type JobDetail } from '@fieldops/types';
 
 import { InfoRow } from '../../../components/common/InfoRow';
 import {
@@ -9,6 +9,8 @@ import {
   Button,
   Card,
   type BadgeTone,
+  SectionTitle,
+  type IconName,
 } from '../../../components/ui';
 import { useTheme } from '../../../theme';
 import {
@@ -19,6 +21,15 @@ import {
   type JobCommand,
 } from '../presentation';
 import { JobPriorityBadge, JobStatusBadge } from './JobBadges';
+
+const COMMAND_ICONS: Readonly<Partial<Record<JobAction, IconName>>> = {
+  [JobAction.START]: 'play-circle-outline',
+  [JobAction.COMPLETE]: 'checkmark-circle-outline',
+  [JobAction.ASSIGN]: 'person-add-outline',
+  [JobAction.EDIT]: 'create-outline',
+  [JobAction.CANCEL]: 'close-circle-outline',
+  [JobAction.DELETE]: 'trash-outline',
+};
 
 /** Runs a command, asking first when it is irreversible or destructive. */
 export function confirmThen(command: JobCommand, run: () => void): void {
@@ -79,6 +90,9 @@ export function JobCommandButtons({
           key={command.action}
           label={command.label}
           variant={command.variant}
+          {...(COMMAND_ICONS[command.action] !== undefined && {
+            icon: COMMAND_ICONS[command.action],
+          })}
           onPress={() => onRun(command)}
           disabled={busy}
         />
@@ -96,9 +110,7 @@ export function JobInformation({
 }): React.JSX.Element {
   return (
     <Card>
-      <AppText variant="label" tone="muted">
-        Details
-      </AppText>
+      <SectionTitle title="Details" icon="information-circle-outline" />
       <InfoRow label="Scheduled" value={formatSchedule(job.scheduledAt)} />
       <InfoRow label="Customer" value={job.customerName} />
       {/* Address and coordinates: JobSiteCard (FieldOperationSections.tsx). */}
@@ -136,9 +148,7 @@ export function JobChecklist({
   }
   return (
     <Card>
-      <AppText variant="label" tone="muted">
-        Checklist
-      </AppText>
+      <SectionTitle title="Checklist" icon="checkbox-outline" />
       {job.checklist.map(item => (
         <AppText key={item.id}>
           {item.position + 1}. {item.label}
@@ -161,9 +171,7 @@ export function JobFieldNotes({
   }
   return (
     <Card>
-      <AppText variant="label" tone="muted">
-        Field notes
-      </AppText>
+      <SectionTitle title="Field notes" icon="create-outline" />
       {composer}
       {job.fieldNotes.map(note => (
         <InfoRow
@@ -185,9 +193,7 @@ export function JobHistory({
 }): React.JSX.Element {
   return (
     <Card>
-      <AppText variant="label" tone="muted">
-        History
-      </AppText>
+      <SectionTitle title="History" icon="time-outline" />
       {job.history.map(entry => (
         <InfoRow
           key={entry.id}

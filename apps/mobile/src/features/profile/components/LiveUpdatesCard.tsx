@@ -1,8 +1,11 @@
 import React from 'react';
 
 import { InfoRow } from '../../../components/common/InfoRow';
-import { AppText, Card } from '../../../components/ui';
-import { usePushStatus, useRealtimeStatus } from '../../../hooks/useLiveUpdates';
+import { AppText, Card, SectionTitle } from '../../../components/ui';
+import {
+  usePushStatus,
+  useRealtimeStatus,
+} from '../../../hooks/useLiveUpdates';
 
 const REALTIME = {
   stopped: 'Paused (offline or in the background)',
@@ -28,9 +31,7 @@ export function LiveUpdatesCard(): React.JSX.Element {
   const push = usePushStatus();
   return (
     <Card>
-      <AppText variant="label" tone="muted">
-        Live updates
-      </AppText>
+      <SectionTitle title="Live updates" icon="radio-outline" />
       <InfoRow label="Realtime" value={REALTIME[realtime]} />
       <InfoRow label="Push notifications" value={PUSH[push]} />
       <AppText variant="caption" tone="muted">
