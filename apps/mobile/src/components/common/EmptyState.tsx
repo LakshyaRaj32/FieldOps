@@ -2,20 +2,25 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { useTheme } from '../../theme';
-import { AppText, Button } from '../ui';
+import { AppText, Button, Icon, type IconName } from '../ui';
 
 export interface EmptyStateProps {
   readonly title: string;
   readonly description?: string;
+  /** What is missing, for example `notifications-outline`. */
+  readonly icon?: IconName;
   readonly actionLabel?: string;
+  readonly actionIcon?: IconName;
   readonly onAction?: () => void;
 }
 
-/** Shown when a screen or section has nothing to display yet. */
+/** Shown when a screen or section has nothing to display yet: icon, title, why, action. */
 export function EmptyState({
   title,
   description,
+  icon = 'file-tray-outline',
   actionLabel,
+  actionIcon,
   onAction,
 }: EmptyStateProps): React.JSX.Element {
   const theme = useTheme();
@@ -23,7 +28,11 @@ export function EmptyState({
     <View
       style={[
         styles.container,
-        { gap: theme.spacing.sm, paddingVertical: theme.spacing.xl },
+        {
+          gap: theme.spacing.sm,
+          paddingVertical: theme.spacing.xl,
+          paddingHorizontal: theme.spacing.lg,
+        },
       ]}
     >
       <View
@@ -35,12 +44,14 @@ export function EmptyState({
             marginBottom: theme.spacing.xs,
           },
         ]}
-      />
+      >
+        <Icon name={icon} size="lg" tone="primary" />
+      </View>
       <AppText variant="heading" style={styles.centered}>
         {title}
       </AppText>
       {description !== undefined ? (
-        <AppText tone="muted" style={styles.centered}>
+        <AppText tone="muted" style={[styles.centered, styles.description]}>
           {description}
         </AppText>
       ) : null}
@@ -49,6 +60,8 @@ export function EmptyState({
           label={actionLabel}
           onPress={onAction}
           variant="secondary"
+          size="sm"
+          {...(actionIcon !== undefined && { icon: actionIcon })}
           style={{ marginTop: theme.spacing.sm }}
         />
       ) : null}
@@ -58,6 +71,12 @@ export function EmptyState({
 
 const styles = StyleSheet.create({
   container: { alignItems: 'center' },
-  mark: { width: 48, height: 48 },
+  mark: {
+    width: 56,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   centered: { textAlign: 'center' },
+  description: { maxWidth: 320 },
 });

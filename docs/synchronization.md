@@ -1,8 +1,196 @@
 # Synchronization Architecture
 
-> Status: **design (Version 0).** Implemented in **V6** (custom sync engine). It relies on
-> V5 (local SQLite) and is hardened further in V13 (idempotency, locks, reliability).
-> The device-side principles are in [offline-first.md](offline-first.md).
+> Status: **implemented in Phase 3 (Offline-First)** for the worker's job workflow. The first
+> section describes what is built. The sections after it are the original design (V0), kept
+> as the longer-term target; where Phase 3 deliberately built something simpler, the first
+> section says so and why. The device-side principles are in [offline-first.md](offline-first.md).
+
+## As built in Phase 3
+
+### Data ownership
+
+```text
+PostgreSQL  → authoritative server state (jobs, history, field notes, processed mutations)
+SQLite      → the worker's local offline state (per user: fieldops-<userId>.sqlite)
+  jobs.server_json → the last job the server sent (never edited locally)
+  jobs.local_json  → server copy + pending commands: what the worker sees
+  outbox           → the worker's commands until the server has ruled on them
+Redux / React    → UI state only; sync status is exposed through React context
+```
+
+### Components
+
+```text
+Worker screens ──read──▶ LocalJobStore (SQLite) ◀──write── local command handlers
+      │                        ▲    │                       (start · complete · note)
+      │ "sync now"             │    │ pending entries
+      ▼                        │    ▼
+ JobSyncEngine ───── push (domain commands + Idempotency-Key) ─────▶ NestJS jobs API
+   retry/backoff      pull (GET /api/v1/jobs/working-set)   ◀──────   PostgreSQL
+   conflict policy    ──▶ applyWorkingSet (one transaction)
+```
+
+| Piece | File |
+| --- | --- |
+| SQLite adapter and migrations | `apps/mobile/src/services/db/` |
+| Local schema, store (repository), projection | `apps/mobile/src/features/jobs/data/localSchema.ts`, `localJobStore.ts`, `projection.ts` |
+| Sync engine, retry policy, transport | `apps/mobile/src/features/jobs/data/syncEngine.ts`, `retryPolicy.ts`, `apiTransport.ts` |
+| Session lifecycle and triggers | `apps/mobile/src/features/jobs/data/OfflineJobsProvider.tsx`, `offlineSession.ts` |
+| Shared state machine | `packages/shared/src/job-state-machine.ts` |
+| Server idempotency, notes, working set | `apps/api/src/jobs/` (`processed_mutations`, `job_notes`) |
+
+### Offline mutations
+
+| Command | Offline? | Local change (one SQLite transaction) | Server call | If sync fails | If it conflicts |
+| --- | :---: | --- | --- | --- | --- |
+| Start job | ✅ | outbox `job.start`; local view `IN_PROGRESS`, `startedAt` = device time | `POST /jobs/:id/start` | Retried (see below); stays `IN_PROGRESS` locally | Job cancelled or reassigned: server wins, entry `conflict`, local view shows the server state |
+| Complete job | ✅ | outbox `job.complete`; local view `COMPLETED` | `POST /jobs/:id/complete` | Same | Same (for example cancelled while the worker was offline: stays `CANCELLED`) |
+| Add field note | ✅ | outbox `job.note.add` with a device-generated note ID; note shown at once | `POST /jobs/:id/notes` | Same | Notes are append-only and accepted on a job in any status: they only fail if the job is no longer the worker's |
+| Start / complete with a position (Phase 4) | ✅ | the fix in the entry's payload; local view shows it with the phone's distance estimate | body `{ location }` | Same; the fix is kept | Same; a replay keeps the first fix |
+| Attach a photo (Phase 4) | ✅ | outbox `job.evidence.add` + `evidence_files` row; photo shown "Waiting to upload" | `POST /jobs/:id/evidence` (multipart, 120 s timeout) | Same backoff; offline not counted; a missing local file fails for good | Append-only; `413`/`415`/`422` are failures (shown, never retried) |
+| Send a job message (Phase 4) | ✅ | outbox `job.message.send`; message shown "waiting to send" | `POST /jobs/:id/messages` | Same | Append-only, like notes |
+| Assign, edit, cancel, delete (managers) | ❌ | — | online only | Error shown | Optimistic concurrency (`409 VERSION_CONFLICT`) |
+
+A local command is validated against the local view with the shared state machine first
+(for example "complete" needs `IN_PROGRESS`). A refused command writes nothing.
+
+### Sync lifecycle
+
+```text
+LOCAL MUTATION   store.startJob(): one transaction = outbox row + recomputed local view
+      ↓
+OUTBOX           status pending, mutation_id (UUIDv7) created once
+      ↓
+SYNC             engine cycle: recover in_flight → push in outbox order → pull
+      ↓
+SERVER           POST /jobs/:id/start  with Idempotency-Key: <mutation_id>
+      ↓          processed_mutations row written in the SAME transaction as the change
+RESPONSE         the job as the server now sees it
+      ↓
+LOCAL UPDATE     one transaction: entry synced + server copy replaced + view recomputed
+      ↓
+PULL             GET /jobs/working-set → every job replaced as server copy, pending commands
+                 re-applied on top; jobs missing from it removed (unless still pending)
+```
+
+- **Ordering.** Entries are pushed in outbox order (`seq`). If an entry of a job must wait
+  (backoff), the job's later entries wait too; other jobs continue. Processing is sequential.
+- **Single flight.** One cycle at a time; requests during a cycle coalesce into one more.
+- **Triggers.** Database opened (sign-in, app start, also offline), app foreground,
+  connectivity regained, every local command, pull-to-refresh, "Sync now" (Profile), the
+  engine's own retry timer, and since Phase 4 every realtime event, every realtime
+  (re)connection and every push received in the foreground ([realtime.md](realtime.md)).
+  Messages and evidence metadata arrive with the working set; there is no separate channel. Connectivity is only a hint: the outcome of the request decides.
+- **Restart.** The outbox lives in SQLite. On every cycle, `in_flight` entries (an attempt
+  whose outcome the app never saw) go back to `pending`; resending is safe because of the
+  server's idempotency.
+
+### Idempotency
+
+- Every device command carries `Idempotency-Key: <mutation_id>`. The key is created with the
+  outbox entry and reused on every attempt, across restarts.
+- The server records `(user_id, idempotency_key, operation, job_id)` in `processed_mutations`
+  **in the transaction that applies the command** (inserted first, so a unique violation can
+  only mean "already processed"). A retry finds the record and gets the current job back
+  instead of a second application; two simultaneous retries are separated by the primary key.
+- A key reused for a different command or job is `422 IDEMPOTENCY_KEY_REUSED`. Rejected
+  commands are not recorded, so a rejection is never replayed as a success.
+- Field notes have device-generated IDs, which makes them idempotent even without the key.
+- Proven by: API E2E `offline-sync.e2e-spec.ts` (sequential and concurrent duplicates, replay
+  after the job moved on) and the mobile engine tests (lost responses, crash while in flight).
+
+### Conflict lifecycle
+
+```text
+STALE CLIENT      the worker started a job offline; meanwhile the manager cancelled it
+      ↓
+SERVER DETECTS    POST /start → state machine: CANCELLED → start not allowed → 409
+                  INVALID_STATUS_TRANSITION (a reassigned job: 404, not visible any more)
+      ↓
+CLIENT RECEIVES   classifyFailure → 'conflict'
+      ↓
+RESOLUTION        server wins: entry → conflict (never retried); it no longer applies to
+                  the local view; the pulled server copy (CANCELLED) is shown
+      ↓
+LOCAL STATE       the worker sees the server state and the reason, and dismisses it
+```
+
+**Stale-version policy.** Jobs carry a `version` that grows with every change. For worker
+commands the **state machine**, not the version number, decides: a manager editing the
+address while the worker is offline must not reject the worker's "start". So a command is
+applied when its transition is valid in the current server state, even if the device saw an
+older version, and rejected as a conflict when it is not. Manager edits (`PATCH`) are the
+opposite case: there `version` is required and a stale one is `409 VERSION_CONFLICT`.
+
+| Situation | Rule |
+| --- | --- |
+| Start or complete, transition valid now | Applied (version staleness alone is not a conflict) |
+| Start or complete, transition invalid now (cancelled, already moved on) | `409 INVALID_STATUS_TRANSITION` → conflict, server state kept |
+| Command already applied (retry, second device) | Success, no second change |
+| Job reassigned to someone else | `404` → conflict; the job leaves the device after the entry resolves |
+| Field note | Append-only: never conflicts while the job is the worker's |
+| Later commands after a conflict | Still sent; the server judges each against its current state (a note is kept, a completion of a cancelled job is not) |
+
+No last-write-wins anywhere: the local database never overwrites the server, and the server
+never takes device state wholesale; only commands travel.
+
+### Retry policy
+
+| Failure | Classification | Behavior |
+| --- | --- | --- |
+| Network error, timeout | offline | Entry stays `pending`, attempts **not** counted (a worker offline for days never exhausts retries); the cycle stops; the engine probes again with growing gaps |
+| HTTP 5xx, 429, `VERSION_CONFLICT` (a lost race), unreadable response | retryable | Attempts +1; next attempt after `random(0, min(10 min, 2 s × 2^(attempt−1)))` (exponential backoff, full jitter), persisted as `next_attempt_at` |
+| 10th retryable failure | dead letter | Entry `failed`; shown with the reason; the worker can **Try again** |
+| `409 INVALID_STATUS_TRANSITION`, `404`, `403` | conflict | Entry `conflict`; server state wins; never retried |
+| `400`, `422` (validation, reused key) | rejected | Entry `failed`; never retried (a bug) |
+| `401` after the base query's single refresh failed | unauthenticated | Cycle stops, entry kept; the app returns to sign-in; the outbox is preserved and syncs after the same worker signs in |
+
+A failed or conflicting entry never blocks other jobs.
+
+### Outbox states
+
+`pending` → `in_flight` → `synced` (pruned after 7 days) · `failed` (dead letter) ·
+`conflict`. "Retrying" is `pending` with `attempts > 0` and a `next_attempt_at`.
+
+### Deliberate deviations from the design below
+
+| Design | Built | Why |
+| --- | --- | --- |
+| `POST /sync/push` batches and `GET /sync/pull` with a change-log cursor | The existing domain endpoints for commands, `GET /jobs/working-set` snapshot for pull | A worker's working set is small (their open jobs and those closed in the last 7 days, at most 200). A snapshot needs no change log, handles revocations naturally (a job missing from it is gone) and cannot miss changes. A cursor-based change log becomes worthwhile with larger working sets or reference data (Phase 5/6) |
+| `mutationId` in a batch body | `Idempotency-Key` header per command | Same guarantee on the ordinary endpoints; the header is the widely used convention |
+| `BLOCKED_BY_PREVIOUS` rejections | Later commands are still sent and judged individually | The state machine already rejects what no longer makes sense, and notes must not be lost |
+| Redux mirror of sync status | React context from the engine | Only the UI reads it; SQLite remains the truth |
+| Shared retry/backoff in `@fieldops/shared` | In the mobile app | No server-side consumer yet (queues are Phase 5) |
+| Pruning of `processed_mutations` after 90 days | Not yet | A cleanup job belongs with background workers (Phase 5); rows are small |
+
+---
+
+## Field operations (multi-tenant phase)
+
+Local schema **v3** rebuilds the outbox table to accept the field lifecycle's commands, keeping
+every pending entry exactly; jobs stored by older versions read as `GENERAL` jobs whose
+manager is their creator. The new outbox commands, each sent to its own endpoint with the
+entry's mutation ID as `Idempotency-Key`:
+
+| Command | Endpoint | Payload |
+| --- | --- | --- |
+| `job.accept` | `POST /jobs/:id/accept` | – |
+| `job.decline` | `POST /jobs/:id/decline` | `{ reason }` |
+| `job.depart` | `POST /jobs/:id/depart` | `{ location? }` |
+| `job.arrive` | `POST /jobs/:id/arrive` | `{ location? }` |
+| `job.submit` | `POST /jobs/:id/submit` | answers, counts, order lines, payment (with its device-generated ID) |
+| `job.fail` | `POST /jobs/:id/fail` | `{ reason }` |
+
+- The phone decides each step with the shared state machine and refuses an incomplete
+  submission with the shared requirements (`REQUIREMENTS_NOT_MET`) **before** queuing it, so a
+  submission queued offline is one the server accepts, unless the operation changed meanwhile.
+- The projection shows a submitted operation immediately: status `SUBMITTED`, the answers,
+  counts, new order lines (with product names from the cached catalog) and the payment as
+  pending verification.
+- The working set carries the active product catalog, stored in `sync_state`, so an order can
+  be collected offline.
+- Verification, rejection and rescheduling are manager actions and online only.
+
 
 FieldOps implements its **own** synchronization engine. It sits on established infrastructure
 (SQLite, PostgreSQL, HTTPS) but the protocol, outbox, conflict policies and retry strategy are
@@ -10,7 +198,7 @@ FieldOps-specific. We build it ourselves because sync correctness depends on the
 state machines, assignment rules, append-only evidence), and generic sync frameworks either
 hide those decisions or dictate the data model.
 
-## Goals
+### Goals
 
 1. **No lost writes.** Work committed on the device eventually reaches the server, or ends up
    in an explicit, user-visible "needs attention" state. It is never silently dropped.
@@ -25,7 +213,7 @@ hide those decisions or dictate the data model.
 6. **Authorized.** Every mutation is authorized on the server individually, as if it were a
    direct API call.
 
-## Non-goals
+### Non-goals
 
 - A general-purpose CRDT or multi-master replication. The server is authoritative.
 - Peer-to-peer device sync.
@@ -33,7 +221,7 @@ hide those decisions or dictate the data model.
 - Synchronizing the entire organization's data to every device. Devices get a scoped working
   set.
 
-## Overview
+### Overview
 
 ```text
  DEVICE                                                    SERVER
@@ -55,7 +243,7 @@ A sync **cycle** runs in this order: refresh the session if needed → **push** 
 **pull** changes → apply locally. Pushing first means the pull reflects the server's handling of
 the device's own changes.
 
-## Identifiers
+### Identifiers
 
 - Every entity and every mutation uses a **UUIDv7** generated on the device when it is created
   there.
@@ -63,7 +251,7 @@ the device's own changes.
   message) keep the same ID forever. There is no temporary-ID remapping.
 - `mutationId` doubles as the **idempotency key** for that mutation.
 
-## The outbox (device)
+### The outbox (device)
 
 Conceptual schema (finalized in V5–V6):
 
@@ -80,7 +268,7 @@ Conceptual schema (finalized in V5–V6):
 | `attempts`, `next_attempt_at`, `last_error` | Retry bookkeeping |
 | `protocol_version` | The schema version the payload was written with |
 
-### Mutation lifecycle
+#### Mutation lifecycle
 
 ```text
             enqueue (same txn as domain change)
@@ -101,7 +289,7 @@ Conceptual schema (finalized in V5–V6):
 - `rejected` entries are **not deleted**. They are shown to the user with a reason, and the
   local domain state is reconciled (see [Conflict resolution](#conflict-resolution)).
 
-## Push protocol
+### Push protocol
 
 ```http
 POST /api/v1/sync/push
@@ -141,7 +329,7 @@ Content-Type: application/json
 
 (The JSON above is illustrative. The exact schemas are defined in `@fieldops/shared` in V6.)
 
-### Server processing
+#### Server processing
 
 For each mutation, in the order the device sent them:
 
@@ -169,7 +357,7 @@ mutations on the **same entity** that depend on a rejected one are also rejected
 `processed_mutations` rows are retained long enough to outlive any realistic offline period
 (for example 90 days, configurable), then pruned.
 
-## Pull protocol
+### Pull protocol
 
 ```http
 GET /api/v1/sync/pull?cursor=<opaque>&limit=500
@@ -199,14 +387,14 @@ GET /api/v1/sync/pull?cursor=<opaque>&limit=500
   downloads a fresh snapshot of its working set **while preserving its outbox**, and pushes
   the outbox again afterwards.
 
-### Applying pulled changes with a pending outbox
+#### Applying pulled changes with a pending outbox
 
 If a pulled change touches an entity that still has `pending` local mutations, the device
 applies the server state and then **re-applies its pending commands locally** on top (a local
 rebase), so the UI keeps showing the user's intended state until the server rules on it. This
 is safe because outbox entries are commands, not snapshots.
 
-## Conflict resolution
+### Conflict resolution
 
 Conflicts are handled **per data type** with explicit policies. The data model is designed so
 that most worker writes cannot conflict at all.
@@ -232,7 +420,7 @@ that most worker writes cannot conflict at all.
 - Field evidence is the most valuable data in the system. Policies prefer **keeping evidence
   with a flag** over rejecting it.
 
-## Ordering and dependencies
+### Ordering and dependencies
 
 - Mutations for the **same entity** are pushed and applied in outbox order (FIFO per entity).
 - Mutations for **different entities** are independent. A stuck entity does not block others.
@@ -242,7 +430,7 @@ that most worker writes cannot conflict at all.
 - **Location batches** travel on their own endpoint and queue (V7), so high-volume telemetry
   never delays job mutations.
 
-## Retry and backoff
+### Retry and backoff
 
 Implemented once in `@fieldops/shared` and used by both the mobile sync engine and server-side
 workers.
@@ -264,7 +452,7 @@ workers.
 - A connectivity-regained event or an explicit user "Sync now" may bring the next attempt
   forward but does not reset server-signaled `Retry-After`.
 
-## Batching
+### Batching
 
 - Push up to N mutations or M KB per request (initial values: 100 mutations or 256 KB).
 - Pull pages of up to 500 changes.
@@ -272,7 +460,7 @@ workers.
   whichever comes first, adapted to battery and connectivity; designed in V7).
 - Requests are gzip-compressed.
 
-## Sync triggers
+### Sync triggers
 
 | Trigger | Version |
 | --- | --- |
@@ -287,7 +475,7 @@ workers.
 Only **one sync cycle runs at a time** per device (a single-flight guard). Additional triggers
 while a cycle runs coalesce into at most one follow-up cycle.
 
-## Failure scenarios
+### Failure scenarios
 
 | Scenario | What happens | Why it is correct |
 | --- | --- | --- |
@@ -302,7 +490,7 @@ while a cycle runs coalesce into at most one follow-up cycle.
 | Old app version after a protocol change | Server supports N−1; beyond that returns `426`; outbox preserved until the app updates | Explicit versioning |
 | Change-log retention exceeded | `RESYNC_REQUIRED` → snapshot while preserving outbox | Bounded server storage, safe recovery |
 
-## Observability (V15)
+### Observability (V15)
 
 - **Device:** outbox depth, age of the oldest pending entry, sync cycle duration, failure
   counts by classification, rejected count. Reported with anonymized telemetry and crash
@@ -312,7 +500,7 @@ while a cycle runs coalesce into at most one follow-up cycle.
   change-log lag.
 - Every push carries a request ID that links device logs, server logs and audit entries.
 
-## Testing strategy
+### Testing strategy
 
 - **Protocol unit tests** for the shared state machine, backoff and schema validation.
 - **Server integration tests** against real PostgreSQL: concurrent duplicate submissions,

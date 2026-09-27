@@ -1,8 +1,15 @@
 # Backend Architecture
 
-> Status: **design (Version 0).** The NestJS application is generated in V3. Auth endpoints
-> arrive in V2 (see the sequencing note in [roadmap.md](roadmap.md)). Modules are added in
-> the versions listed below.
+> Status: **implemented through Phase 3 (Offline-First); Phase 4 (Field Operations) code
+> written, awaiting verification**: `realtime`, `notifications`, `storage`, `events` modules and
+> the jobs module's evidence, messages and locations (see the module map). The NestJS application exists in
+> `apps/api` with configuration, Prisma/PostgreSQL, the HTTP pipeline, health checks, `auth`,
+> `users` (Phase 1) and `jobs` (Phase 2; since Phase 3 also idempotent device commands, field
+> notes and the worker's working set; see [api.md](api.md#jobs), [api.md](api.md#offline-sync)
+> and [database.md](database.md)). Setup: [backend-development.md](backend-development.md) and
+> [authentication.md](authentication.md). The rest of this document is the design that later
+> versions follow. Where V2 deliberately deviated from the V0 design, the text says so.
+> Modules are added in the versions listed below.
 
 ## 1. Goals
 
@@ -38,18 +45,20 @@ open WebSocket connections.
 
 | Module | Responsibility | Version |
 | --- | --- | --- |
-| `common` | Config validation, error mapping (Problem Details), logging, request IDs, base guards, Prisma service, health checks | V3 (partly V2) |
+| `common` | Config validation, error mapping (error envelope), access logging, request IDs, base guards, Prisma service, health checks | V2 |
 | `auth` | Login, token issuance and rotation, logout, session and device binding, password hashing | V2 |
-| `users` | User profiles, role assignment (admin), user lifecycle | V2–V3 |
+| `users` | User profiles, role assignment (admin), user lifecycle | V2 (table, profile, admin list); Phase 2 added the assignable-workers list |
 | `organizations` | Tenancy, org settings | V3 |
-| `jobs` | Jobs, assignments, job state machine, job events | V4 |
-| `audit` | Append-only audit log writer and query API (admin) | V4 (writer), grows over time |
-| `sync` | Push/pull endpoints, `processed_mutations`, `change_log`, visibility filtering | V6 |
-| `locations` | Batched location ingestion, latest-position queries, retention | V7 |
-| `messaging` | Conversations, messages, WebSocket delivery | V8 |
-| `realtime` | Socket.IO gateway, authentication on handshake, room policy, event envelopes | V8 |
-| `notifications` | Notification orchestration: preferences, deduplication, FCM delivery, device tokens | V9 (queue-backed in V12) |
-| `files` | Presigned upload/download URLs, attachment metadata, media post-processing | V9 |
+| `jobs` | Jobs, assignment, job history (`job_events`), job policy, field notes (`job_notes`), device-command idempotency (`processed_mutations`), the worker's working set | **Phase 2–3 (implemented)**; the state machine is in `@fieldops/shared` |
+| `audit` | Append-only audit log writer and query API (admin) | Phase 5 (job-related history already lives in `job_events`) |
+| `sync` | Batched push/pull, `change_log`, visibility filtering | Not needed yet: Phase 3 syncs through the jobs module's domain endpoints and a working-set snapshot ([synchronization.md](synchronization.md#deliberate-deviations-from-the-design-below)). Created when a second entity syncs or working sets outgrow snapshots |
+| `events` | In-process domain events published after commit (`job.changed`, `job.message.created`, `session.ended`) | **Phase 4**; transactional outbox + BullMQ in Phase 5 |
+| `storage` | `ObjectStorage` interface; local-disk implementation (`STORAGE_DIR`) | **Phase 4** |
+| `realtime` | Socket.IO gateway `/realtime`, authentication on handshake (`AccessTokenVerifier`), rooms from the job policy, event envelopes ([realtime.md](realtime.md)) | **Phase 4** |
+| `notifications` | Inbox, notification rules, FCM HTTP v1 delivery, device tokens per session ([notifications.md](notifications.md)) | **Phase 4** (queue-backed in Phase 5) |
+| `locations` | Batched location ingestion, latest-position queries, retention | Not needed: Phase 4 records on-demand fixes on job history entries ([location.md](location.md)); created if tracking is ever required |
+| `messaging` | Conversations beyond a job (1:1) | Not needed yet: job messages live in the jobs module (the job's policy and working set) |
+| `files` | Attachment metadata, media post-processing | Not needed yet: evidence is a jobs child collection using `storage` ([evidence.md](evidence.md)) |
 | `analytics` | Operational reporting (job throughput, on-time rate) | later, on demand |
 | `ai` | Controlled AI tools and use cases | V17 |
 
@@ -58,13 +67,16 @@ time.
 
 ## 4. Inside a module
 
+Modules live directly under `src/` (`src/auth`, `src/users`; V2 dropped the planned
+`src/modules/` level because it added nesting without adding information).
+
 ```text
-modules/jobs/
+jobs/
 ├── jobs.module.ts
 ├── jobs.controller.ts          Transport: HTTP routing, DTO binding. No business logic.
 ├── jobs.service.ts             Application layer: use cases, transactions, authorization calls
 ├── domain/
-│   ├── job-state-machine.ts    Pure logic: allowed transitions (shared with mobile via @fieldops/shared)
+│   ├── job-state-machine.ts    Pure logic: allowed transitions (moves to @fieldops/shared in Phase 3)
 │   └── job.policy.ts           Pure authorization policies (can user X do Y to job Z?)
 ├── data/
 │   └── jobs.repository.ts      Prisma queries owned by this module
@@ -91,7 +103,7 @@ modules/jobs/
 ```text
 request
   → request ID + structured logging (middleware)
-  → rate limiter (basic in V2, custom distributed in V11)
+  → rate limiter (custom distributed, V11; not present before)
   → AuthGuard           verify access token → attach principal { userId, orgId, role, sessionId }
   → PermissionsGuard    route-level permission check (e.g. job:assign)
   → ValidationPipe      runtime validation of body/query/params; unknown fields rejected
@@ -100,7 +112,8 @@ request
         → resource policy check (e.g. "is caller assigned to this job?")
         → transaction: domain logic + persistence + audit + outbox events
   → response serialization (explicit response DTOs; never return raw Prisma models)
-  → exception filter → RFC 9457 Problem Details on error
+  → response envelope { success: true, data }
+  → exception filter → error envelope { success: false, error: { code, message } }
 ```
 
 ## 6. API design
@@ -109,12 +122,14 @@ request
   actions (`POST /jobs/{id}/assign`) rather than overloading `PATCH`.
 - **OpenAPI** generated from code (`@nestjs/swagger`), served in non-production environments
   and exported as an artifact in CI.
-- **Validation.** Runtime schemas at the boundary. Contracts that the mobile app also uses live
-  in `@fieldops/shared` (the schema library decision is in V3; see
-  [technology-decisions.md](technology-decisions.md#pending-decisions)).
-- **Errors.** `application/problem+json` with `type`, `title`, `status`, `detail`, a stable
-  `code` (for example `JOB_REASSIGNED`) and `requestId`. Stack traces are never returned to
-  clients.
+- **Validation.** DTO classes validated by `class-validator` through a global
+  `ValidationPipe`, with unknown fields rejected. Contract *types* shared with the mobile app
+  live in `@fieldops/types`, and DTOs `implements` them, so drift fails compilation (V2
+  decision; see [technology-decisions.md](technology-decisions.md#backend-libraries-v2)).
+- **Errors.** The envelope `{ success: false, error: { code, message, details?, requestId } }`
+  with a stable `code` (for example `JOB_REASSIGNED`). Stack traces, database and framework
+  messages are never returned to clients. V2 chose this envelope over RFC 9457 Problem Details;
+  see [api.md](api.md).
 - **Pagination.** Cursor-based (`?cursor=&limit=`) for lists that can grow. Offset pagination
   is allowed only for small admin tables.
 - **Idempotency.** Critical non-sync commands accept an `Idempotency-Key` header. The key,
@@ -144,18 +159,31 @@ request
 
 ## 8. Authentication (V2)
 
+Implemented; the full description is in [authentication.md](authentication.md).
+
 - Email and password to start. **Argon2id** hashing. The design allows adding SSO/OIDC for
   organizations later.
-- **Access token:** a short-lived JWT (about 15 minutes) carrying `sub`, `org`, `role`, `sid`.
-  Asymmetric signing so keys can rotate.
-- **Refresh token:** an opaque random value, stored **hashed** and bound to a session and
-  device, rotated on every use, with **reuse detection**. Presenting an already-rotated token
-  revokes the whole session family.
-- Logout and admin revocation invalidate sessions immediately for refresh. Access tokens expire
-  quickly. A revocation check against Redis can be added for sensitive operations (V10+).
-- Login and refresh endpoints are rate-limited and audited.
+- **Access token:** a short-lived JWT (15 minutes) carrying `sub`, `role`, `sid` (`org` joins
+  with organizations in V3). **Deviation:** HS256 with a secret instead of asymmetric signing,
+  because the API is the only issuer and verifier for now. Revisit in V18.
+- **Refresh token:** a signed JWT naming its session plus a random `jti`, stored **hashed**
+  (SHA-256) on the session row, rotated on every use, with **reuse detection**. Presenting an
+  already-rotated token revokes the whole session. **Deviation:** a JWT rather than an opaque
+  value, so the session is found by primary key and a genuine old token can be told apart from
+  a forged one without keeping a token history.
+- Every authenticated request also checks its session in the database, so logout, revocation
+  and deactivation take effect immediately. Redis can cache this lookup (V10+).
+- Login, registration and refresh are rate-limited in V11 and audited with the audit log
+  (Phase 5).
 
 ## 9. Authorization
+
+Implemented for jobs in Phase 2 (`src/jobs/domain/job.policy.ts`): a permission table per role
+(`job:create`, `job:assign`, `job:work`, ...), the resource relationship (a worker and their
+assigned jobs), and `allowedActions` computed from both for every job response. `@Roles()` route
+gates are generated from the same table (`rolesWith('job:assign')`), so gate and service cannot
+disagree. The service checks in a fixed order: not visible → `404`, not permitted → `403`,
+wrong status → `409`.
 
 - **Roles → permissions** mapping in code (see [architecture.md](architecture.md#8-role-model)).
 - **Guards** check route-level permissions. **Policies** in each module's `domain/` check
@@ -165,13 +193,24 @@ request
 - Authorization failures return `403` without revealing whether the resource exists in
   another tenant (`404` where appropriate).
 
-## 10. Realtime (V8)
+### Device-command idempotency (Phase 3)
+
+`POST /jobs/:id/start`, `/complete` and `/notes` accept an `Idempotency-Key`. `JobsService`
+looks the key up in `processed_mutations` (replay: the current job), otherwise runs the
+command with the record passed to the repository, which inserts it **first** in the command's
+transaction. A unique violation there can only mean a concurrent duplicate, which then replays;
+a failed compare-and-set rolls the record back with the change, so rejections are never
+recorded. The general `Idempotency-Key` interceptor for all critical commands remains Phase 5
+work.
+
+## 10. Realtime (built in Phase 4, see [realtime.md](realtime.md))
 
 - Socket.IO through NestJS gateways, **websocket-only transport**.
-- The access token is verified on handshake. Connections are dropped when the session is
-  revoked.
-- **Rooms:** `user:{id}`, `org:{id}:managers`, `job:{id}`. Joining a room is authorized by
-  the same policies as REST.
+- The access token is verified on handshake with the same checks as REST. Connections close
+  at token expiry and at sign-out (`session.ended`).
+- **Rooms (as built):** `user:{id}`, `session:{id}`, `managers` (single organization). There
+  are no client-joined `job:{id}` rooms: the server addresses a job's audience (managers and
+  the assigned worker) directly, which keeps authorization in one place.
 - **Event envelope:** `{ type, version, id, occurredAt, data }`, with versioned payload schemas
   in `@fieldops/shared`.
 - **Events are hints.** The authoritative state is always available through REST or sync.

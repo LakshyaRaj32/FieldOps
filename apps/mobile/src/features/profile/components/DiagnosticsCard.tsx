@@ -2,11 +2,11 @@ import React, { useState } from 'react';
 
 import { getConfig } from '../../../app/config';
 import { ErrorState } from '../../../components/common/ErrorState';
-import { AppText, Button, Card } from '../../../components/ui';
+import { AppText, Button, Card, SectionTitle } from '../../../components/ui';
 import { useConnectivity } from '../../../hooks/useConnectivity';
 import { useLazyCheckLivenessQuery } from '../../../services/api/healthApi';
 import { describeConnectivityStatus } from '../../../services/network/connectivity';
-import { InfoRow } from './InfoRow';
+import { InfoRow } from '../../../components/common/InfoRow';
 
 /** Throws during render so the error boundary can be verified on a device (development only). */
 function RenderErrorTrigger(): React.JSX.Element {
@@ -25,9 +25,7 @@ export function DiagnosticsCard(): React.JSX.Element {
 
   return (
     <Card>
-      <AppText variant="label" tone="muted">
-        Diagnostics
-      </AppText>
+      <SectionTitle title="Diagnostics" icon="construct-outline" />
       <InfoRow label="Environment" value={config.environment} />
       <InfoRow label="API base URL" value={config.apiBaseUrl} />
       <InfoRow

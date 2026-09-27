@@ -1,10 +1,10 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { AppText } from '../../../components/ui';
-import { useTheme } from '../../../theme';
+import { AppText } from '../ui';
+import { useTheme } from '../../theme';
 
-/** A label/value pair for read-only details (account, diagnostics). */
+/** A label/value pair for read-only details (account, diagnostics, job details). */
 export function InfoRow({
   label,
   value,

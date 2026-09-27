@@ -1,0 +1,756 @@
+// FieldOps database schema (PostgreSQL).
+//
+// Conventions (docs/backend-architecture.md, "Data layer"):
+// - UUIDv7 primary keys: globally unique, and time-ordered so B-tree inserts stay local.
+// - snake_case tables and columns in the database, camelCase in TypeScript (@map/@@map).
+// - timestamptz for every timestamp; money as BIGINT minor units (never floats).
+// - Every index is justified by a query in the code. Indexing decisions are listed in
+//   docs/database.md.
+//
+// Tenancy (docs/business-domain.md, "Tenant isolation"): every business row belongs to one
+// organization. Where two rows must belong to the SAME organization (an operation and its
+// shop, a team's manager and worker...), the foreign key is composite, (x_id,
+// organization_id) → (id, organization_id), so the database itself refuses a cross-tenant
+// reference, whatever the application code does.
+//
+// Hand-written in the migrations (Prisma cannot express them): CHECK constraints, partial
+// unique indexes and the audit log's append-only trigger. `prisma migrate dev` would propose
+// dropping the partial indexes; keep them (docs/database.md, "Hand-written SQL").
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Must stay identical to Role in @fieldops/types (checked at compile time in src/users/role.ts).
+enum Role {
+  WORKER
+  MANAGER
+  ORGANIZATION_ADMIN
+  SUPER_ADMIN
+}
+
+/// Why a session stopped being usable. Kept on the row so revocations can be audited.
+enum SessionRevocationReason {
+  /// The user signed out on this device (POST /auth/logout).
+  LOGOUT
+  /// The user signed out everywhere (password change, deactivation).
+  LOGOUT_ALL
+  /// An already-rotated refresh token was presented: the token was probably stolen.
+  REFRESH_TOKEN_REUSE
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+/// A business using FieldOps (a tenant). Created and suspended by SUPER_ADMINs.
+model Organization {
+  id                  String             @id @default(uuid(7)) @db.Uuid
+  name                String             @unique @db.VarChar(200)
+  contactName         String?            @map("contact_name") @db.VarChar(200)
+  contactEmail        String?            @map("contact_email") @db.VarChar(254)
+  contactPhone        String?            @map("contact_phone") @db.VarChar(30)
+  address             String?            @db.VarChar(500)
+  status              OrganizationStatus @default(ACTIVE)
+  /// ISO 4217. Every amount of the organization is in this currency's minor unit.
+  currency            String             @default("INR") @db.Char(3)
+  /// IANA time zone: the organization's calendar day ("due today", "collected today").
+  timeZone            String             @default("Asia/Kolkata") @map("time_zone") @db.VarChar(64)
+  /// Distance from a shop beyond which a reported position is flagged to managers.
+  arrivalRadiusMeters Int                @default(300) @map("arrival_radius_m")
+  /// The next order number; taken and incremented in the order's own transaction.
+  nextOrderNumber     Int                @default(1001) @map("next_order_number")
+  suspendedAt         DateTime?          @map("suspended_at") @db.Timestamptz(3)
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  users               User[]
+  teamMemberships     TeamMembership[]
+  shops               Shop[]
+  shopAssignments     ShopAssignment[]
+  products            Product[]
+  orders              Order[]
+  payments            Payment[]
+  jobs                Job[]
+  auditLogs           AuditLog[]
+
+  @@map("organizations")
+}
+
+model User {
+  id                     String              @id @default(uuid(7)) @db.Uuid
+  /// Stored trimmed and lower-cased by the application, so the plain unique index enforces
+  /// case-insensitive uniqueness.
+  email                  String              @unique @db.VarChar(254)
+  /// Argon2id PHC string (algorithm, parameters, salt and hash). Never the password.
+  passwordHash           String              @map("password_hash")
+  firstName              String              @map("first_name") @db.VarChar(100)
+  lastName               String              @map("last_name") @db.VarChar(100)
+  role                   Role                @default(WORKER)
+  isActive               Boolean             @default(true) @map("is_active")
+  /// Null only for SUPER_ADMINs and for self-registered workers no organization has added
+  /// (CHECK constraint users_organization_check).
+  organizationId         String?             @map("organization_id") @db.Uuid
+  organization           Organization?       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  /// MANAGER only: sees every team, shop and operation of the organization.
+  organizationWideAccess Boolean             @default(false) @map("organization_wide_access")
+  createdAt              DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sessions               Session[]
+  assignedJobs           Job[]               @relation("JobAssignedWorker")
+  managedJobs            Job[]               @relation("JobManager")
+  createdJobs            Job[]               @relation("JobCreatedBy")
+  jobActions             JobEvent[]          @relation("JobEventActor")
+  jobAssignments         JobEvent[]          @relation("JobEventAssignee")
+  jobNotes               JobNote[]
+  mutations              ProcessedMutation[]
+  jobEvidence            JobEvidence[]
+  jobMessages            JobMessage[]
+  pushDevices            PushDevice[]
+  notifications          Notification[]
+  teamWorkers            TeamMembership[]    @relation("TeamManager")
+  teamManagers           TeamMembership[]    @relation("TeamWorker")
+  shopAssignments        ShopAssignment[]
+  createdOrders          Order[]
+  recordedPayments       Payment[]           @relation("PaymentRecordedBy")
+  verifiedPayments       Payment[]           @relation("PaymentVerifiedBy")
+  auditEntries           AuditLog[]
+
+  /// Target of the composite foreign keys that keep references within one organization.
+  @@unique([id, organizationId])
+  /// Member lists and assignable-worker lists of an organization, by role.
+  @@index([organizationId, role])
+  @@map("users")
+}
+
+/// One signed-in device (one login). The refresh token is rotated on every use; the row
+/// keeps only the SHA-256 hash of the current token, which is enough to detect reuse of
+/// any earlier token of the same session.
+model Session {
+  id               String                   @id @db.Uuid
+  userId           String                   @map("user_id") @db.Uuid
+  user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Hex SHA-256 of the current refresh token.
+  refreshTokenHash String                   @map("refresh_token_hash") @db.Char(64)
+  /// Raw User-Agent header, truncated. Helps a user recognize a session; nothing else about
+  /// the device is collected.
+  userAgent        String?                  @map("user_agent") @db.VarChar(255)
+  createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastUsedAt       DateTime                 @default(now()) @map("last_used_at") @db.Timestamptz(3)
+  /// Sliding expiry: pushed forward on every successful refresh.
+  expiresAt        DateTime                 @map("expires_at") @db.Timestamptz(3)
+  revokedAt        DateTime?                @map("revoked_at") @db.Timestamptz(3)
+  revokedReason    SessionRevocationReason? @map("revoked_reason")
+  /// The device's push registration, if it registered one (one per session: a session is
+  /// one signed-in device).
+  pushDevice       PushDevice?
+
+  /// Revoking or listing all sessions of a user (logout-all, account deactivation).
+  /// Postgres does not index foreign keys automatically.
+  @@index([userId])
+  @@map("sessions")
+}
+
+/// A worker's place in a manager's team, for a period. Never deleted: moving a worker ends
+/// the current row and starts a new one, so who managed whom (and when) stays on record.
+/// One current manager per worker (partial unique index, hand-written).
+model TeamMembership {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  managerId      String       @map("manager_id") @db.Uuid
+  manager        User         @relation("TeamManager", fields: [managerId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  workerId       String       @map("worker_id") @db.Uuid
+  worker         User         @relation("TeamWorker", fields: [workerId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  startedAt      DateTime     @default(now()) @map("started_at") @db.Timestamptz(3)
+  endedAt        DateTime?    @map("ended_at") @db.Timestamptz(3)
+
+  /// A manager's current team (ended_at IS NULL) — the scope check behind every manager
+  /// request.
+  @@index([managerId, endedAt])
+  /// A worker's current manager, and their history.
+  @@index([workerId, startedAt])
+  @@map("team_memberships")
+}
+
+enum ShopStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// A customer location. Owned by the organization; managers and workers are linked to it
+/// through ShopAssignment, never stored on it.
+model Shop {
+  id             String           @id @default(uuid(7)) @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  name           String           @db.VarChar(200)
+  ownerName      String?          @map("owner_name") @db.VarChar(200)
+  phone          String?          @db.VarChar(30)
+  email          String?          @db.VarChar(254)
+  address        String           @db.VarChar(500)
+  /// WGS 84. Both set or both null (CHECK constraint).
+  latitude       Float?           @db.DoublePrecision
+  longitude      Float?           @db.DoublePrecision
+  status         ShopStatus       @default(ACTIVE)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  assignments    ShopAssignment[]
+  orders         Order[]
+  jobs           Job[]
+  notifications  Notification[]
+
+  /// Names are unique within an organization; also the list's order (by name).
+  @@unique([organizationId, name])
+  @@unique([id, organizationId])
+  @@map("shops")
+}
+
+/// A manager covering a shop or a worker serving it, for a period (many-to-many both
+/// ways). Ending an assignment keeps the row. One current assignment per shop and user
+/// (partial unique index, hand-written).
+model ShopAssignment {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  shopId         String       @map("shop_id") @db.Uuid
+  shop           Shop         @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  userId         String       @map("user_id") @db.Uuid
+  user           User         @relation(fields: [userId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  startedAt      DateTime     @default(now()) @map("started_at") @db.Timestamptz(3)
+  endedAt        DateTime?    @map("ended_at") @db.Timestamptz(3)
+
+  /// The shops a manager covers (their scope) or a worker serves.
+  @@index([userId, endedAt])
+  /// A shop's current managers and workers.
+  @@index([shopId, endedAt])
+  @@map("shop_assignments")
+}
+
+enum ProductStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+model Product {
+  id             String        @id @default(uuid(7)) @db.Uuid
+  organizationId String        @map("organization_id") @db.Uuid
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  name           String        @db.VarChar(200)
+  sku            String        @db.VarChar(64)
+  category       String?       @db.VarChar(100)
+  /// Minor units. Orders copy it; changing it never changes an existing order.
+  unitPrice      BigInt        @map("unit_price")
+  status         ProductStatus @default(ACTIVE)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  orderItems     OrderItem[]
+  jobLines       JobLine[]
+
+  @@unique([organizationId, sku])
+  @@unique([id, organizationId])
+  /// The catalog, by name.
+  @@index([organizationId, name])
+  @@map("products")
+}
+
+enum OrderStatus {
+  OPEN
+  PARTIALLY_DELIVERED
+  DELIVERED
+  CANCELLED
+}
+
+/// A shop's order. Its items and total never change after creation (cancel and re-order
+/// instead). `paidAmount` is the sum of the order's VERIFIED payments: maintained only in the
+/// verification transaction, under a row lock, and bounded by the total (CHECK constraint),
+/// so the database itself refuses an overpayment.
+model Order {
+  id                 String       @id @default(uuid(7)) @db.Uuid
+  organizationId     String       @map("organization_id") @db.Uuid
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  shopId             String       @map("shop_id") @db.Uuid
+  shop               Shop         @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  /// Unique within the organization, from Organization.nextOrderNumber.
+  orderNumber        String       @map("order_number") @db.VarChar(30)
+  status             OrderStatus  @default(OPEN)
+  totalAmount        BigInt       @map("total_amount")
+  paidAmount         BigInt       @default(0) @map("paid_amount")
+  orderDate          DateTime     @map("order_date") @db.Date
+  dueDate            DateTime     @map("due_date") @db.Date
+  notes              String?      @db.VarChar(2000)
+  createdById        String       @map("created_by_id") @db.Uuid
+  createdBy          User         @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  /// The order-collection operation it was taken in (no foreign key: history, not a link).
+  sourceJobId        String?      @map("source_job_id") @db.Uuid
+  cancelledAt        DateTime?    @map("cancelled_at") @db.Timestamptz(3)
+  cancellationReason String?      @map("cancellation_reason") @db.VarChar(500)
+  /// Set when the overdue notification went out (sent once per order).
+  overdueNotifiedAt  DateTime?    @map("overdue_notified_at") @db.Timestamptz(3)
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  items              OrderItem[]
+  payments           Payment[]
+  jobs               Job[]
+
+  @@unique([organizationId, orderNumber])
+  @@unique([id, organizationId])
+  /// A shop's orders, newest first (shop account).
+  @@index([shopId, createdAt])
+  /// Due and overdue balances (dashboard, overdue scan).
+  @@index([organizationId, dueDate])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                String  @id @default(uuid(7)) @db.Uuid
+  orderId           String  @map("order_id") @db.Uuid
+  order             Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  position          Int
+  productId         String  @map("product_id") @db.Uuid
+  product           Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  /// Copies of the product at order time.
+  productName       String  @map("product_name") @db.VarChar(200)
+  sku               String  @db.VarChar(64)
+  quantity          Int
+  unitPrice         BigInt  @map("unit_price")
+  lineTotal         BigInt  @map("line_total")
+  /// Raised by verified deliveries; never above `quantity` (CHECK).
+  deliveredQuantity Int     @default(0) @map("delivered_quantity")
+
+  @@unique([orderId, position])
+  @@map("order_items")
+}
+
+enum PaymentMethod {
+  CASH
+  UPI
+  BANK_TRANSFER
+  CHEQUE
+  CARD
+}
+
+enum PaymentStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
+}
+
+/// Money a worker reported collecting against an order. Counts towards the order only once
+/// VERIFIED. The ID comes from the worker's device (offline submissions are idempotent). A
+/// reference can be used once per organization and method, unless the earlier payment was
+/// rejected (partial unique index, hand-written).
+model Payment {
+  id              String        @id @db.Uuid
+  organizationId  String        @map("organization_id") @db.Uuid
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  orderId         String        @map("order_id") @db.Uuid
+  order           Order         @relation(fields: [orderId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  /// The collection operation it was recorded in.
+  jobId           String?       @map("job_id") @db.Uuid
+  job             Job?          @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  amount          BigInt
+  method          PaymentMethod
+  /// Stored trimmed and upper-cased, so the uniqueness check ignores case.
+  reference       String?       @db.VarChar(100)
+  status          PaymentStatus @default(PENDING_VERIFICATION)
+  /// Device time of collection (informational).
+  collectedAt     DateTime      @map("collected_at") @db.Timestamptz(3)
+  recordedById    String        @map("recorded_by_id") @db.Uuid
+  recordedBy      User          @relation("PaymentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  verifiedById    String?       @map("verified_by_id") @db.Uuid
+  verifiedBy      User?         @relation("PaymentVerifiedBy", fields: [verifiedById], references: [id], onDelete: Restrict)
+  /// When it was verified or rejected.
+  verifiedAt      DateTime?     @map("verified_at") @db.Timestamptz(3)
+  rejectionReason String?       @map("rejection_reason") @db.VarChar(500)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  /// An order's payments by status (collectable balance, pending amount).
+  @@index([orderId, status])
+  /// Collected today, pending verification (dashboard).
+  @@index([organizationId, status, verifiedAt])
+  /// A collection operation's payments.
+  @@index([jobId])
+  @@map("payments")
+}
+
+/// Must stay identical to JobType in @fieldops/types (checked in src/jobs/job-enums.ts).
+enum JobType {
+  GENERAL
+  DELIVERY
+  PAYMENT_COLLECTION
+  SHOP_VISIT
+  ORDER_COLLECTION
+  INVENTORY_CHECK
+}
+
+/// Must stay identical to JobStatus in @fieldops/types (checked in src/jobs/job-enums.ts).
+/// Allowed transitions live in @fieldops/shared (packages/shared/src/job-state-machine.ts).
+enum JobStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  ACCEPTED
+  EN_ROUTE
+  ARRIVED
+  SUBMITTED
+  FAILED
+}
+
+enum JobPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum JobEventType {
+  CREATED
+  ASSIGNED
+  STARTED
+  COMPLETED
+  CANCELLED
+  ACCEPTED
+  DECLINED
+  DEPARTED
+  ARRIVED
+  SUBMITTED
+  VERIFIED
+  REJECTED
+  FAILED
+  RESCHEDULED
+}
+
+/// An operation: a unit of field work (a GENERAL job, a delivery, a payment collection, a
+/// shop visit, an order collection or an inventory check). Manager-owned fields are edited
+/// through PATCH with optimistic concurrency on `version`; status changes only through the
+/// action endpoints, which also append a JobEvent. Hand-written CHECK constraints keep
+/// status, assignment and the type's references consistent.
+model Job {
+  id                 String             @id @default(uuid(7)) @db.Uuid
+  organizationId     String             @map("organization_id") @db.Uuid
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  type               JobType            @default(GENERAL)
+  title              String             @db.VarChar(200)
+  description        String?            @db.VarChar(5000)
+  /// GENERAL: the customer. Shop operations: the shop's name when created.
+  customerName       String             @map("customer_name") @db.VarChar(200)
+  address            String             @db.VarChar(500)
+  /// WGS 84. Both set or both null (CHECK constraint).
+  latitude           Float?             @db.DoublePrecision
+  longitude          Float?             @db.DoublePrecision
+  scheduledAt        DateTime           @map("scheduled_at") @db.Timestamptz(3)
+  priority           JobPriority        @default(NORMAL)
+  status             JobStatus          @default(PENDING)
+  /// The responsible manager: sees it (even without organization-wide access), verifies it,
+  /// is notified about it.
+  managerId          String             @map("manager_id") @db.Uuid
+  manager            User               @relation("JobManager", fields: [managerId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  /// The current assignee (a WORKER of the same organization). History is in job_events.
+  assignedWorkerId   String?            @map("assigned_worker_id") @db.Uuid
+  assignedWorker     User?              @relation("JobAssignedWorker", fields: [assignedWorkerId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  /// Required for every type except GENERAL (CHECK); never changes.
+  shopId             String?            @map("shop_id") @db.Uuid
+  shop               Shop?              @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  /// DELIVERY and PAYMENT_COLLECTION: the order (CHECK). ORDER_COLLECTION: the order taken,
+  /// set on verification.
+  orderId            String?            @map("order_id") @db.Uuid
+  order              Order?             @relation(fields: [orderId, organizationId], references: [id, organizationId], onDelete: Restrict, onUpdate: Restrict)
+  /// PAYMENT_COLLECTION only (CHECK): minor units to collect. Set by the manager.
+  expectedAmount     BigInt?            @map("expected_amount")
+  /// The manager asked for a photo (on top of the type's own requirements).
+  requiresPhoto      Boolean            @default(false) @map("requires_photo")
+  /// Instructions from the manager. The worker's own notes are JobNote rows.
+  notes              String?            @db.VarChar(5000)
+  /// The worker's summary, sent with the submission.
+  submissionNote     String?            @map("submission_note") @db.VarChar(2000)
+  cancellationReason String?            @map("cancellation_reason") @db.VarChar(500)
+  failureReason      String?            @map("failure_reason") @db.VarChar(500)
+  createdById        String             @map("created_by_id") @db.Uuid
+  createdBy          User               @relation("JobCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  /// Optimistic concurrency: incremented on every change (edits and transitions).
+  version            Int                @default(1)
+  acceptedAt         DateTime?          @map("accepted_at") @db.Timestamptz(3)
+  arrivedAt          DateTime?          @map("arrived_at") @db.Timestamptz(3)
+  startedAt          DateTime?          @map("started_at") @db.Timestamptz(3)
+  submittedAt        DateTime?          @map("submitted_at") @db.Timestamptz(3)
+  completedAt        DateTime?          @map("completed_at") @db.Timestamptz(3)
+  cancelledAt        DateTime?          @map("cancelled_at") @db.Timestamptz(3)
+  failedAt           DateTime?          @map("failed_at") @db.Timestamptz(3)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  checklistItems     JobChecklistItem[]
+  lines              JobLine[]
+  events             JobEvent[]
+  fieldNotes         JobNote[]
+  evidence           JobEvidence[]
+  messages           JobMessage[]
+  payments           Payment[]
+  notifications      Notification[]
+
+  /// A worker's job list, ordered by schedule (also indexes the foreign key).
+  @@index([assignedWorkerId, scheduledAt])
+  /// Organization-wide lists: keyset pagination on (scheduled_at, id), optionally by status.
+  @@index([organizationId, scheduledAt, id])
+  @@index([organizationId, status, scheduledAt])
+  /// A scoped manager's lists and dashboard.
+  @@index([managerId, scheduledAt, id])
+  /// A shop's operations (shop detail, visited today).
+  @@index([shopId, scheduledAt])
+  /// Operations of an order (cancellation check).
+  @@index([orderId])
+  @@map("jobs")
+}
+
+/// A checklist item defined by the manager, answered by the worker when they submit.
+model JobChecklistItem {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  jobId        String   @map("job_id") @db.Uuid
+  job          Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  position     Int
+  label        String   @db.VarChar(200)
+  /// The worker's answer (null until submitted).
+  checked      Boolean?
+  responseNote String?  @map("response_note") @db.VarChar(500)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// Loads a job's checklist in order; one item per position.
+  @@unique([jobId, position])
+  @@map("job_checklist_items")
+}
+
+/// A product line of an operation: delivery items (from the order), products to count, or
+/// products ordered in an order collection. `quantity` is the worker's report.
+model JobLine {
+  id               String  @id @default(uuid(7)) @db.Uuid
+  jobId            String  @map("job_id") @db.Uuid
+  job              Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  position         Int
+  productId        String  @map("product_id") @db.Uuid
+  product          Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  productName      String  @map("product_name") @db.VarChar(200)
+  sku              String  @db.VarChar(64)
+  /// DELIVERY: the order item it delivers (no foreign key needed: items never change).
+  orderItemId      String? @map("order_item_id") @db.Uuid
+  expectedQuantity Int?    @map("expected_quantity")
+  quantity         Int?
+
+  @@unique([jobId, position])
+  @@map("job_lines")
+}
+
+/// Append-only history of a job: creation, assignments and status changes. Written in the
+/// same transaction as the change it records. Never updated or deleted through the API
+/// (rows go only with their job, which can be deleted only while never assigned).
+model JobEvent {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  jobId          String       @map("job_id") @db.Uuid
+  job            Job          @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  type           JobEventType
+  fromStatus     JobStatus?   @map("from_status")
+  toStatus       JobStatus    @map("to_status")
+  actorId        String       @map("actor_id") @db.Uuid
+  actor          User         @relation("JobEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+  assigneeId     String?      @map("assignee_id") @db.Uuid
+  assignee       User?        @relation("JobEventAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
+  /// Declined, rejected, failed, rescheduled, cancelled: why (as given).
+  reason         String?      @db.VarChar(500)
+  /// Worker status changes only: the fix the phone reported, if it had one. Device data (it
+  /// can be spoofed), recorded for review; all four set or all null (CHECK).
+  latitude       Float?       @db.DoublePrecision
+  longitude      Float?       @db.DoublePrecision
+  accuracyMeters Float?       @map("accuracy_m") @db.DoublePrecision
+  locatedAt      DateTime?    @map("located_at") @db.Timestamptz(3)
+  /// Distance from the job site, computed by the server (null without job coordinates).
+  distanceMeters Float?       @map("distance_m") @db.DoublePrecision
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// A job's history in order (the details screen).
+  @@index([jobId, createdAt])
+  /// The dashboard's activity feed (newest first, scoped through the job).
+  @@index([createdAt])
+  @@map("job_events")
+}
+
+/// A note the assigned worker recorded in the field, often offline. Append-only: notes never
+/// conflict. The ID is generated by the device, so a note keeps it from capture to server.
+model JobNote {
+  id         String   @id @db.Uuid
+  jobId      String   @map("job_id") @db.Uuid
+  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  authorId   String   @map("author_id") @db.Uuid
+  author     User     @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  body       String   @db.VarChar(2000)
+  /// Device time of capture: shown to people, never used for ordering (device clocks drift).
+  occurredAt DateTime @map("occurred_at") @db.Timestamptz(3)
+  /// Server receipt time: the authoritative order.
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// A job's notes in receipt order (details screen, working set).
+  @@index([jobId, createdAt])
+  @@map("job_notes")
+}
+
+/// Server-side idempotency for commands sent by devices (header Idempotency-Key). A row is
+/// written in the same transaction as the change it records, so a retried command (a lost
+/// response, an app killed mid-sync) is recognized and replayed instead of applied twice.
+/// The primary key also stops two concurrent retries from both applying.
+/// Owned by the jobs module, the only module with offline commands so far.
+model ProcessedMutation {
+  userId         String   @map("user_id") @db.Uuid
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  idempotencyKey String   @map("idempotency_key") @db.Uuid
+  /// The command, for example job.start. Reusing a key for another command is refused.
+  operation      String   @db.VarChar(50)
+  jobId          String   @map("job_id") @db.Uuid
+  /// HTTP status of the original success, returned again on replay.
+  responseStatus Int      @map("response_status") @db.SmallInt
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@id([userId, idempotencyKey])
+  @@map("processed_mutations")
+}
+
+/// A photo attached to a job by the assigned worker (often captured offline): proof of
+/// delivery, a payment receipt, a shop-visit picture. The database holds metadata only; the
+/// bytes live in object storage under `storageKey`. Append-only.
+model JobEvidence {
+  /// Generated by the device, so offline evidence keeps its ID from capture to server.
+  id           String   @id @db.Uuid
+  jobId        String   @map("job_id") @db.Uuid
+  job          Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  uploadedById String   @map("uploaded_by_id") @db.Uuid
+  uploadedBy   User     @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+  /// Detected from the file's bytes on the server; the client's claim is ignored.
+  contentType  String   @map("content_type") @db.VarChar(50)
+  /// Size of the stored (metadata-stripped) file.
+  sizeBytes    Int      @map("size_bytes")
+  width        Int
+  height       Int
+  /// Hex SHA-256 of the stored bytes (integrity checks, duplicate detection).
+  sha256       String   @db.Char(64)
+  /// Generated by the server from the job and evidence IDs; never from client input.
+  storageKey   String   @unique @map("storage_key") @db.VarChar(300)
+  /// Device time of capture: shown to people, never used for ordering.
+  capturedAt   DateTime @map("captured_at") @db.Timestamptz(3)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// A job's evidence in receipt order (details screen, working set, per-job limit).
+  @@index([jobId, createdAt])
+  @@map("job_evidence")
+}
+
+/// A message on a job between its assigned worker and managers. Append-only; the ID comes
+/// from the sending device, which makes offline sends idempotent.
+model JobMessage {
+  id         String   @id @db.Uuid
+  jobId      String   @map("job_id") @db.Uuid
+  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  authorId   String   @map("author_id") @db.Uuid
+  author     User     @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  body       String   @db.VarChar(2000)
+  /// Device time of writing (informational).
+  occurredAt DateTime @map("occurred_at") @db.Timestamptz(3)
+  /// Server receipt time: the authoritative order.
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// A job's conversation in receipt order.
+  @@index([jobId, createdAt])
+  @@map("job_messages")
+}
+
+/// A device's FCM registration token. Bound to the session the device signed in with, so
+/// signing out (or any revocation) ends push delivery to that device, and a user with two
+/// phones has two rows. A token is unique: if it shows up on another session (the phone
+/// changed hands), it moves there.
+model PushDevice {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  sessionId String   @unique @map("session_id") @db.Uuid
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Opaque FCM registration token (about 160 characters today).
+  token     String   @unique @db.VarChar(512)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  /// Finding a user's devices when a notification is sent.
+  @@index([userId])
+  @@map("push_devices")
+}
+
+/// Must stay identical to NotificationType in @fieldops/types.
+enum NotificationType {
+  JOB_ASSIGNED
+  JOB_UNASSIGNED
+  JOB_CANCELLED
+  JOB_COMPLETED
+  JOB_MESSAGE
+  JOB_RESCHEDULED
+  JOB_DECLINED
+  JOB_SUBMITTED
+  JOB_REJECTED
+  JOB_FAILED
+  PAYMENT_OVERDUE
+}
+
+/// A user's in-app notification inbox. Written when a domain event concerns the user; push
+/// delivery (FCM) is a best-effort copy of the same entry. Tenancy follows the user (a user
+/// belongs to one organization), so the row needs no organization of its own.
+model Notification {
+  id        String           @id @default(uuid(7)) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  /// The operation it is about (every type except PAYMENT_OVERDUE; CHECK).
+  jobId     String?          @map("job_id") @db.Uuid
+  job       Job?             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  /// The shop it is about, when there is one.
+  shopId    String?          @map("shop_id") @db.Uuid
+  shop      Shop?            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  title     String           @db.VarChar(120)
+  body      String           @db.VarChar(300)
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  readAt    DateTime?        @map("read_at") @db.Timestamptz(3)
+
+  /// The inbox, newest first, with keyset pagination on (created_at, id).
+  @@index([userId, createdAt, id])
+  @@map("notifications")
+}
+
+/// An append-only record of an important business action. Written in the same transaction
+/// as the action; a trigger refuses UPDATE and DELETE, so history can't be rewritten
+/// through the application (hand-written in the migration).
+model AuditLog {
+  id             String        @id @default(uuid(7)) @db.Uuid
+  /// Null for platform actions (a SUPER_ADMIN creating an organization is recorded on it).
+  organizationId String?       @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  /// Null when the system acted on its own (the overdue scan).
+  actorId        String?       @map("actor_id") @db.Uuid
+  actor          User?         @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  /// `entity.verb`, for example payment.verified.
+  action         String        @db.VarChar(60)
+  entityType     String        @map("entity_type") @db.VarChar(40)
+  entityId       String        @map("entity_id") @db.Uuid
+  summary        String        @db.VarChar(300)
+  /// Details for investigation (amounts, previous values). Never secrets or passwords.
+  data           Json?
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// An organization's log, newest first.
+  @@index([organizationId, createdAt])
+  /// One entity's history.
+  @@index([entityType, entityId, createdAt])
+  @@map("audit_logs")
+}

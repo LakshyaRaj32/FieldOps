@@ -1,0 +1,55 @@
+# Render Blueprint Specification (https://render.com/docs/blueprint-spec)
+# Deploys FieldOps API backend as a Docker container connecting to Supabase PostgreSQL.
+
+services:
+  - type: web
+    name: fieldops-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: oregon # Options: oregon, frankfurt, singapore, ohio
+    healthCheckPath: /health/live
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: HOST
+        value: 0.0.0.0
+
+      # Supabase PostgreSQL connection string.
+      # Set in the Render dashboard:
+      # Format: postgresql://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres?sslmode=require
+      - key: DATABASE_URL
+        sync: false
+
+      # Render automatically generates high-entropy random secrets on service creation
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+
+      - key: ACCESS_TOKEN_EXPIRATION
+        value: 15m
+      - key: REFRESH_TOKEN_EXPIRATION
+        value: 30d
+      - key: SWAGGER_ENABLED
+        value: "false"
+
+      # Automatically executes pending Prisma migrations on container startup
+      - key: RUN_MIGRATIONS
+        value: "true"
+
+      - key: OVERDUE_SCAN_INTERVAL
+        value: 1h
+
+      # Local disk storage directory for uploaded evidence
+      - key: STORAGE_DIR
+        value: ./storage
+
+      # CORS origins (comma-separated, leave empty or add frontend domain if web client is introduced)
+      - key: CORS_ORIGINS
+        value: ""
+

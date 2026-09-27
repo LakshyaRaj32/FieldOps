@@ -189,10 +189,36 @@ Run from the repo root (all workspaces) or inside `apps/mobile`:
 | `npm test` | `npm test` | Jest unit tests |
 | — | `npm run format:check` / `npm run format` | Prettier check / fix |
 
-**What is tested (V1):** environment validation, the connectivity status model and slice
-transitions, session state and sign-out cache reset, error normalization, the HTTP base query
-(headers, error mapping, config failures) and theme resolution. Tests sit next to the code as
-`*.test.ts`.
+**What is tested:** environment validation, connectivity, session state and sign-out, error
+normalization, the HTTP base query (V1–V2); job presentation rules, the job form and the job API
+client (Phase 2); SQLite migrations, the local job store (persistence across restarts,
+atomicity), the projection, the retry policy and the sync engine with fault injection (Phase 3).
+Tests sit next to the code as `*.test.ts`.
+
+**SQLite in tests.** Data-layer tests run against Node's built-in SQLite
+(`src/testing/nodeSqliteDatabase.ts`), so they exercise real SQL and transactions. They need
+`@jest-environment node` at the top of the file. `src/testing/fakeJobServer.ts` implements the
+API's rules for worker commands (state machine, assignment, idempotency) with fault injection:
+network down, lost responses, HTTP errors.
+
+**Live offline sync test (against the real API).** `src/features/jobs/data/liveSync.test.ts`
+runs the app's data layer against a running API and database. It is skipped by default. To
+run it against the test database:
+
+```bash
+# terminal 1 (apps/api): the compiled API on port 3000 against fieldops_test
+npm run build
+APP_ENV=development PORT=3000 \
+DATABASE_URL=postgresql://fieldops:fieldops@localhost:5432/fieldops_test \
+JWT_ACCESS_SECRET=e2e-access-secret-0123456789abcdefghijklmnop \
+JWT_REFRESH_SECRET=e2e-refresh-secret-0123456789abcdefghijklmno \
+node dist/main.js
+
+# terminal 2 (apps/mobile)
+FIELDOPS_LIVE_API=1 \
+FIELDOPS_LIVE_DATABASE_URL=postgresql://fieldops:fieldops@localhost:5432/fieldops_test \
+npx jest src/features/jobs/data/liveSync.test.ts
+```
 
 **Writing tests:**
 
@@ -206,38 +232,99 @@ transitions, session state and sign-out cache reset, error normalization, the HT
 **Lint boundaries to know about:**
 
 - Import `react-native-config` only in `src/app/config`, NetInfo only in `src/services/network`,
-  and MMKV only in `src/services/storage`.
+  MMKV and Keychain only in `src/services/storage`, and `react-native-nitro-sqlite` only in
+  `src/services/db`.
 - The global `fetch` is not allowed. Add an RTK Query endpoint with `baseApi.injectEndpoints()`.
 - `console` is not allowed. Use `logger` from `src/utils/logger.ts`.
 
-## Manual test checklist (Version 1)
+## Run against the local API
 
-Run these on the physical phone after `npm run mobile:android`:
+The app talks to the real API from Version 2. Start the backend first
+([backend-development.md](backend-development.md)):
 
-1. **Launch.** The app opens as **FieldOps Dev** with no red error screen. The login screen
-   shows "FieldOps", a "Sign in" card and a "development build" badge.
-2. **Development entry.** Tap **Continue as Worker**. The tabs Dashboard, Jobs, Notifications
-   and Profile appear. The dashboard greets "Dev Worker" with a WORKER badge.
-3. **Tabs.** Switch between all four tabs. Jobs and Notifications show their empty states.
-   On the Dashboard, **Open Jobs** switches to the Jobs tab.
-4. **Connectivity.** Turn on airplane mode: the "You're offline" banner appears under the
-   header, and the dashboard's Connection badge shows Offline. Turn airplane mode off:
-   "Reconnecting…" may appear briefly, then "Back online" for about 2.5 seconds, then the banner
-   disappears.
-5. **Wi-Fi without internet (optional).** On a network with no internet access the app should
-   report Offline, not Online.
-6. **Theme.** Profile → Appearance: choose Dark, then Light, then System. Colors, headers and the
-   tab bar follow. Close the app completely and reopen it: the choice persists.
-7. **Diagnostics.** Profile → Diagnostics shows Environment `development` and API base URL
-   `http://localhost:3000`. **Check API connection** shows a loading state and then
-   "API not reachable" with a reference ID (correct, because there is no backend until V3).
-8. **Error boundary.** Profile → **Simulate render error** shows the "Something went wrong"
-   screen. In development a LogBox notice also appears. **Try again** returns to the app.
-9. **Sign out.** Profile → **Sign out** returns to the login screen. The Android back button
-   does not return to the tabs.
-10. **Other roles.** Sign in as Manager and as Admin. The dashboard copy changes to "Team's jobs".
-11. **Dark mode from the OS.** With Appearance set to System, switch the phone's dark mode.
-    The app follows.
+```bash
+npm run api:dev          # terminal 1: API on http://localhost:3000
+npm run mobile:reverse   # forward the phone's ports 3000 (API) and 8081 (Metro) over USB
+npm run mobile:start     # terminal 2: Metro
+npm run mobile:android   # terminal 3: build and install (after native dependency changes)
+```
+
+`npm run mobile:android` is required once after pulling Version 2, because it adds a native
+module (`react-native-keychain`). Afterwards, JavaScript changes only need Metro.
+
+## Manual test checklist (Version 2)
+
+Run these on the physical phone with the API running and `adb reverse` active:
+
+1. **Launch.** The app shows "Starting FieldOps…" briefly, then the sign-in screen with a
+   "development build" badge. There is no development entry anymore.
+2. **Validation.** Tap **Sign in** with empty fields: inline messages appear under Email and
+   Password, and no request is sent. Register with a 5-character password: "Use at least 8
+   characters."
+3. **Register.** **Create an account** → fill in the form → **Create account**. The main tabs
+   appear; the dashboard greets you by first name with a WORKER badge.
+4. **Profile.** Profile shows your name, email, WORKER role and "Member since".
+5. **Duplicate email.** Sign out, register again with the same email (any capitalization):
+   "An account with this email already exists."
+6. **Wrong password.** Sign in with a wrong password: "Incorrect email or password."
+7. **Login.** Sign in with the correct password: the tabs appear.
+8. **Restart.** Close the app completely (swipe it away) and reopen it: it opens signed in,
+   without the sign-in screen.
+9. **Offline start.** Enable airplane mode, close and reopen the app: it still opens signed in,
+   with the offline banner. Disable airplane mode.
+10. **Token refresh.** Set `ACCESS_TOKEN_EXPIRATION=1m` in `apps/api/.env` and restart the API.
+    Sign in, wait over a minute, then tap **Check API connection** or reopen the app. It keeps
+    working: the API log shows `POST /api/v1/auth/refresh 200` followed by the retried request.
+    Restore `15m` afterwards.
+11. **Session ended by the server.** Sign in, then revoke the session in the database (or
+    replay an old refresh token from Postman): the next authenticated request returns the app to
+    the sign-in screen with "Your session has ended."
+12. **Logout.** Profile → **Sign out**: the sign-in screen appears. The Android back button
+    does not return to the tabs. Reopening the app shows the sign-in screen. In the database,
+    that session has `revoked_reason = LOGOUT`.
+13. **Server unreachable.** Stop the API and try to sign in: "Can't reach the FieldOps server."
+14. **V1 features.** Tabs, connectivity banner, theme switching (and persistence), diagnostics
+    (**Check API connection** now succeeds) and **Simulate render error** behave as in
+    Version 1.
+
+## Offline demo on the phone (Phase 3)
+
+Needs a manager and a worker account (grant the role with
+`npm run user:set-role -w @fieldops/api -- <email> MANAGER`), the API running and
+`npm run mobile:reverse`. Use a second device, Swagger or Postman for the manager.
+
+1. **Online download.** Sign in on the phone as the worker. The manager creates a job and
+   assigns it to the worker. On the phone, pull down on Jobs: the job appears.
+2. **Go offline.** Turn on airplane mode (or stop the API: the app cannot tell the
+   difference, which is the point). The offline banner appears.
+3. **Restart offline.** Swipe the app away and reopen it: signed in, the job is there.
+4. **Work offline.** Open the job → **Start job** (instant, "Waiting to sync"), add a note,
+   **Complete job**. The sync banner says the changes are saved on the phone.
+5. **Force close** and reopen: the job still shows *Completed*, with 3 changes waiting
+   (Profile › Offline sync).
+6. **Reconnect.** Turn airplane mode off. Within seconds the banner goes away (or tap
+   **Sync now**). The manager sees the job *Completed* with the note and one Started and one
+   Completed entry in the history.
+7. **Conflict.** Assign a second job, go offline, start it on the phone, and cancel it as the
+   manager. Reconnect: the phone shows *Cancelled* and "“Start job” on … was not applied: the
+   job changed while you were offline." Dismiss it.
+
+## Field operations on the phone (Phase 4)
+
+**Push setup (optional).** Push needs a Firebase project: put its `google-services.json` in
+`apps/mobile/android/app/` (gitignored) and rebuild; set `FCM_SERVICE_ACCOUNT_FILE` for the
+API ([notifications.md](notifications.md#setup-push)). Without the file the build prints
+"building without push notifications" and Profile › Live updates shows "Not available in this
+build"; everything else works.
+
+**Native code.** The Kotlin modules are generated from `src/services/native/*.ts` by React
+Native codegen during the Gradle build (`codegenConfig` in `package.json`). After changing a
+spec, rebuild the app (Metro reload is not enough).
+
+**Demo.** The full checklist is in [phase-status.md](phase-status.md#phase-4-device-verification):
+assignment notification → location permission and distance → start with position → messages
+→ offline photos, messages and completion → force close → reconnect → exactly-once upload,
+realtime reconnection and the manager's completion notification.
 
 ## Troubleshooting
 

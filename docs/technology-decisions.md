@@ -34,20 +34,25 @@ for infrastructure. Build the FieldOps-specific systems ourselves.**
 | Mobile environment config | react-native-config (per-build-type dotenv files) | V1 |
 | Local database | SQLite (library selected in V5) | V5 |
 | Key-value storage | MMKV 4 (on Nitro Modules) | V1 |
+| Secure credential storage | react-native-keychain 10 (Android Keystore, AES-GCM) | V2 |
 | Connectivity signal | NetInfo | V1 |
 | Animations | React Native Reanimated 4 (with react-native-worklets) | V1 / V14 |
 | Mobile quality tooling | TypeScript 6.0, ESLint 9 (flat config), Prettier, Jest | V1 |
-| Native modules | Kotlin Turbo Modules | V7 |
-| Backend framework | NestJS | V3 (auth endpoints in V2; see roadmap note) |
-| Database | PostgreSQL | V3 |
-| ORM / migrations | Prisma | V3 |
-| Realtime | WebSockets through Socket.IO and Nest gateways | V8 |
-| Push | Firebase Cloud Messaging | V9 |
-| File storage | S3-compatible object storage (MinIO locally) | V9 |
+| Native modules | Kotlin Turbo Modules (`FieldOpsLocation`, `FieldOpsFiles`) | Phase 4 |
+| Backend framework | NestJS 12 (ESM, Express 5) | V2 |
+| Database | PostgreSQL 18 | V2 |
+| ORM / migrations | Prisma 7 (pg driver adapter) | V2 |
+| Authentication | Argon2id (`argon2`), JWT (`@nestjs/jwt`, `passport-jwt`), server-side sessions | V2 |
+| Backend validation / API docs | class-validator + class-transformer, `@nestjs/swagger` | V2 |
+| Backend tests / lint | Vitest 4 + Supertest, oxlint | V2 |
+| Realtime | WebSockets through Socket.IO 4 and Nest gateways (`@nestjs/websockets`, `@nestjs/platform-socket.io`, `socket.io-client`) | Phase 4 |
+| Push | Firebase Cloud Messaging: HTTP v1 from the API, React Native Firebase in the app | Phase 4 |
+| File storage | `ObjectStorage` interface; local disk now, S3-compatible when deployed on several instances | Phase 4 |
+| Photo capture | react-native-image-picker | Phase 4 |
 | Distributed state | Redis | V10 |
 | Queues | BullMQ | V12 |
 | Observability | Structured logs (pino), OpenTelemetry, Prometheus/Grafana | V15 |
-| Containers / CI | Docker, GitHub Actions | V3 (local infra), V16 |
+| Containers / CI | Docker, GitHub Actions | Later (local infra: native PostgreSQL for now), V16 |
 
 ---
 
@@ -211,9 +216,29 @@ Redis), cloud queues such as SQS (vendor lock-in and harder local development).
 - Durability across app kills, OS memory pressure and reboots.
 - Enough performance for thousands of jobs and tens of thousands of location points.
 
-**Library.** Chosen in V5 after a short evaluation of transaction API, JSI performance,
-New Architecture support, maintenance activity and encryption support (SQLCipher). The
-leading candidates are **op-sqlite** and **expo-sqlite**. The choice will be recorded here.
+**Library (decided in Phase 3): `react-native-nitro-sqlite` 10.**
+
+| Criterion | react-native-nitro-sqlite | op-sqlite 18 | expo-sqlite |
+| --- | --- | --- | --- |
+| New Architecture / JSI | Yes (Nitro Modules, C++) | Yes (JSI) | Yes |
+| Fits the project | **Nitro Modules is already built for MMKV v4**, same vendor (Margelo) | New native toolchain | Needs the Expo modules runtime in a bare RN CLI app |
+| Transactions | Queued async transactions with a synchronous executor inside | Yes | Yes |
+| Download / install size | ~10 MB | ~350 MB (bundles SQLCipher, libsql, extensions for many platforms) | Moderate, plus Expo modules |
+| Encryption (SQLCipher) | No | Yes | Via SQLCipher build flag |
+| Maintenance | Active (release a day before adoption) | Active | Active |
+
+The deciding factors were fit and weight on a modest development machine: the app already
+compiles Nitro Modules, and op-sqlite's size buys features FieldOps does not use yet.
+**Trade-off:** encryption at rest is not available in this binding. If Phase 5 security
+hardening requires SQLCipher, switching is contained: only `src/services/db/nitroDatabase.ts`
+imports the library (enforced by ESLint), behind the app's own `SqlDatabase` interface.
+Upstream declares `typeorm` as a dependency (for its optional TypeORM driver); the app never
+imports it, so Metro does not bundle it (verified), it only occupies `node_modules`.
+
+**Tests use Node's built-in SQLite** (`node:sqlite`, Node 22.5+) through the same
+`SqlDatabase` interface (`src/testing/nodeSqliteDatabase.ts`). Repositories, migrations and
+the sync engine are therefore tested against a real SQLite engine, including restarts (the
+same file reopened), with no extra dependency and no native module in Jest.
 
 **Alternatives.** WatermelonDB (includes its own sync model, and we are building our own sync
 engine deliberately), Realm (deprecated device sync, proprietary format), AsyncStorage or MMKV
@@ -331,8 +356,9 @@ room and authorization rules, and the rule that **events are hints and sync is t
 
 ## Docker
 
-**Why.** Reproducible infrastructure. From V3, local PostgreSQL (and later Redis and MinIO)
-run in Docker Compose, so every developer and CI run uses identical versions. From V16, the API
+**Why.** Reproducible infrastructure. Local PostgreSQL (and later Redis and MinIO) will run in
+Docker Compose, so every developer and CI run uses identical versions. Version 2 uses a native
+PostgreSQL 18 install instead, by the repository owner's decision; Compose is adopted later. From V16, the API
 and worker are built into a single multi-stage image that runs identically in CI, staging and
 production.
 
@@ -372,6 +398,154 @@ sampling policy and handoff to the sync engine.
 | **S3-compatible object storage** | Binary media does not belong in Postgres. Presigned uploads keep large bodies off the API. MinIO locally, a managed S3-compatible store in production. |
 | **Argon2id and a standard JWT library** | Proven cryptography. We never implement crypto primitives. |
 
+## Backend libraries (V2)
+
+Version 2 created the backend. These are the choices it made, and why.
+
+| Choice | Why | Alternatives considered |
+| --- | --- | --- |
+| **NestJS 12** | The current major (11 is now tagged `legacy`). ESM-only, so the API is an ESM package (`"type": "module"`, `nodenext` resolution, `.js` import suffixes). Generated from the official CLI template, then adapted to the monorepo | NestJS 11 (CommonJS, more tutorials) was rejected to avoid a major migration soon after starting |
+| **Prisma 7** | The `prisma-client` generator emits TypeScript into `src/generated` (no Rust query engine; queries go through `@prisma/adapter-pg` on node-postgres). `prisma.config.ts` holds the CLI configuration | Prisma 6 (legacy engine); Drizzle or Kysely (closer to SQL, but the V0 decision for Prisma stands) |
+| **Argon2id** (`argon2`) | Memory-hard, OWASP's first recommendation, no 72-byte truncation. Prebuilt binaries for Windows and Linux | bcrypt (allowed by the brief, weaker against GPUs, truncates input) |
+| **`@nestjs/jwt` + `passport-jwt`** | The standard Nest authentication stack. We configure it (algorithm, issuer, audience) and implement FieldOps session logic on top, but no cryptography | A hand-written guard over `jsonwebtoken` (fewer dependencies, but duplicates what Passport does) |
+| **HS256** | A single issuer and verifier (the API) | EdDSA/RS256 with key IDs: V18, or earlier if another service verifies tokens |
+| **class-validator + class-transformer** | Native to Nest's `ValidationPipe` and `@nestjs/swagger`: one DTO class gives validation, transformation and OpenAPI. Contract *types* are shared through `@fieldops/types`, and DTOs `implements` them | Zod (see the resolved decision below) |
+| **`uuid` (v7)** | Session IDs must exist before the row is written (the refresh token contains them); Node has no built-in UUIDv7 | Two writes per login, or UUIDv4 |
+| **helmet** | Standard security headers | Setting headers by hand |
+| **Vitest + Supertest, oxlint** | The Nest 12 template defaults. Vitest runs TypeScript with decorator metadata via Vite 8 (oxc), with no extra transform setup | Jest + ts-jest (CommonJS-oriented, awkward with ESM), ESLint + typescript-eslint (used by the mobile app; kept separate because the RN config ties it to RN rules) |
+| **Custom config validation** instead of `@nestjs/config` | One small pure function (`parseAppConfig`) gives a typed object, aggregated errors and unit tests, mirroring the mobile app's `env.ts`. `process.loadEnvFile` (Node built-in) reads `.env` | `@nestjs/config` + a schema library |
+
+**Mobile: react-native-keychain for tokens.** V1 decided that tokens go in Keystore-backed
+secure storage, never in MMKV. V2 picked `react-native-keychain` 10: it is the most widely used
+option, it is a Turbo Module (New Architecture), and on Android it encrypts with AES-GCM under a
+key that lives in the Keystore (hardware-backed where available). The value is stored with
+`AES_GCM_NO_AUTH` (no biometric prompt), because the app must refresh tokens without user
+interaction. `react-native-sensitive-info` 6 (Nitro-based and more recently released) was the
+alternative. It was not chosen because its generated Nitro code must match the Nitro runtime
+version that MMKV already pins, which couples two native dependencies' upgrade schedules.
+
+## Jobs (Phase 2)
+
+No new dependencies were added in Phase 2. The decisions it made:
+
+| Decision | Chosen | Alternatives | Why |
+| --- | --- | --- | --- |
+| Where the job state machine lives | `apps/api/src/jobs/domain/job-state-machine.ts` (pure TypeScript) | `@fieldops/shared` now | The API consumes `@fieldops/types` for types only; a runtime-shared package needs a build decision (compile it, or let each app bundle it). Phase 2 does not need the rules on the device, because the server computes `allowedActions`. The file has no framework or I/O dependencies (only the status vocabulary), so it moves to `@fieldops/shared` with just its import changed when Phase 3 needs offline transitions |
+| How the app knows which actions to offer | Server-computed `allowedActions` on every job | The app re-implements role and status rules | One source of authorization truth. The app cannot drift from the server |
+| Assignment model | Current assignee on `jobs.assigned_worker_id`; history in `job_events` | `job_assignments` join table (the architecture's conceptual model) | One worker per job is all the workflow needs; history is still complete. A join table can come with crews |
+| Concurrency | Integer `version` compare-and-set on every change | Row locks (`SELECT … FOR UPDATE`), last write wins | Correctness from the database with no lock held across a request; the same `version` becomes the sync `baseVersion` in Phase 3 |
+| Repeated commands | Idempotent by target state (start on a started job returns it unchanged) | `409` on every repeat; `Idempotency-Key` storage | Safe retries and double taps now, with no extra storage. Full `Idempotency-Key` support stays in Phase 5 |
+| List pagination | Keyset cursor on `(scheduled_at, id)`, opaque to clients | Offset pagination | Stable under inserts and deletes, index-backed, and follows the API convention for growing lists |
+| Mobile job data | RTK Query (online) behind feature hooks | SQLite now | SQLite and the outbox are Phase 3 scope. The hooks are the seam Phase 3 replaces |
+| Mobile schedule input | Date and 24-hour time text fields | `@react-native-community/datetimepicker` | Avoids a native dependency and rebuild for one form; revisit with Phase 6 UX polish |
+
+## Offline sync (Phase 3)
+
+| Decision | Chosen | Alternatives | Why |
+| --- | --- | --- | --- |
+| Local data model | Per job: last server copy + local view (server copy with pending commands re-applied), recomputed in the transaction of every change | Mutating local rows directly | The server copy stays authoritative and replaceable; pending work survives any refresh; the view is a pure, tested function (`projection.ts`) |
+| Outbox transport | Existing domain endpoints with `Idempotency-Key` | A batched `/sync/push` endpoint | Domain endpoints already enforce authorization and the state machine; nothing new to secure. Batching can come when volume demands it |
+| Download | Full working-set snapshot (`GET /jobs/working-set`) | Change log with a sequence cursor | Small working sets; no missed changes, revocations for free, no server change log to maintain |
+| Server idempotency storage | PostgreSQL `processed_mutations`, written in the command's transaction | Redis, an in-memory map | Durable across restarts, atomic with the change, no new infrastructure (Redis is Phase 5) |
+| Conflict arbiter for worker commands | The shared state machine | Entity version (reject any stale command) | A manager's field edit must not reject a worker's valid start; the version still guards manager edits |
+| Retry policy | Exponential backoff, full jitter, 10 counted attempts, offline failures uncounted | Fixed intervals; counting all failures | Avoids thundering herds; a long offline period never dead-letters work |
+| `@fieldops/shared` build | TypeScript source for Metro, Jest, Vitest and type checking (`exports` conditions `types` / `react-native`, test aliases); compiled `dist/` (tsc) loaded by the API at runtime, built by the API's `prebuild`/`prestart` scripts | Compile everything; ship TS to Node | No build step in the mobile and test loops; the running API is plain JavaScript. Entry modules avoid relative imports (Node ESM needs `.js`, Metro resolves extensionless source) |
+| Sync status for the UI | React context fed by the engine | Redux slice mirror | Only the UI reads it; one fewer copy |
+| Device IDs | UUIDv7 from Math.random | `react-native-get-random-values` + `uuid` | Uniqueness is all that is needed; no native dependency. Revisit if IDs must be unguessable |
+
+## Field operations (Phase 4)
+
+Every entry: the problem, the decision, the alternatives, why, and the trade-offs.
+
+### Location: a Kotlin module on LocationManager
+
+- **Problem.** Record where a job is started and completed, and show the distance to the
+  site, without continuous tracking. React Native has no location API.
+- **Decision.** A small Kotlin Turbo Module (`FieldOpsLocation`: `isLocationEnabled`,
+  `getCurrentPosition`, `openLocationSettings`) on the platform `LocationManager`;
+  permissions through React Native's `PermissionsAndroid`.
+- **Alternatives.** `@react-native-community/geolocation` (a dependency for three calls, and
+  no way to tell "location switched off" from "no fix"); `react-native-geolocation-service`
+  and the Fused Location Provider (Google Play services dependency, better battery for
+  continuous tracking, which FieldOps does not do); Expo Location (Expo modules runtime).
+- **Why.** No new dependency, exact error codes for actionable messages, and the Kotlin
+  boundary the architecture planned for location. One fix at a time needs nothing more.
+- **Trade-offs.** Native code to maintain and test on a device (no JS-only tests of it). If
+  background tracking is ever required, the Fused Location Provider in a foreground service
+  becomes the right tool, and this module grows or is replaced.
+
+### Evidence files: a Kotlin module for app-private copies
+
+- **Problem.** The image picker writes into the cache directory, which Android may clear;
+  photos captured offline must survive until uploaded.
+- **Decision.** `FieldOpsFiles` (`importFile`, `fileExists`, `deleteFile`), confined to
+  `files/evidence`.
+- **Alternatives.** `react-native-fs` / `@dr.pogodin/react-native-fs`, `react-native-blob-util`
+  (general file-system libraries with far more surface than three functions).
+- **Trade-offs.** More native code; kept tiny and confined.
+
+### Photo capture: react-native-image-picker
+
+- **Problem.** Take a photo or choose one, resized, without handling camera intents,
+  FileProviders and the Android photo picker ourselves.
+- **Decision.** `react-native-image-picker` (camera through the system camera app, gallery
+  through Android's photo picker, native resizing to 1920 px / JPEG quality 0.8).
+- **Alternatives.** `react-native-vision-camera` (an in-app camera: large, needs the CAMERA
+  permission, more than a field photo needs); `expo-image-picker` (Expo modules runtime);
+  writing the intents in Kotlin (reinventing a solved problem).
+- **Why.** One maintained library covers both sources, supports the New Architecture, and
+  needs **no CAMERA permission** when the app does not declare it.
+- **Trade-offs.** EXIF handling differs between devices, so the server strips metadata anyway.
+
+### Realtime: Socket.IO through NestJS gateways (confirmed)
+
+The V0 decision (see [WebSockets](#websockets-socketio-through-nestjs-gateways)) was kept:
+rooms, a maintained NestJS adapter, bounded reconnection with jitter built into the client,
+and a Redis adapter for Phase 5. WebSocket transport only. The raw `ws` library with React
+Native's built-in WebSocket would have avoided the client dependency, at the cost of writing
+rooms and reconnection by hand. Trade-off: the Socket.IO protocol on top of WebSockets (a
+client must speak it), and `socket.io-client` in the app bundle.
+
+### Push notifications: FCM (Phase 4)
+
+- **Problem.** Reach a worker or manager whose app is in the background or closed.
+- **Decision.** FCM. Server: the **FCM HTTP v1 API called directly**, authenticated with a
+  service-account JWT assertion signed by `@nestjs/jwt` (already a dependency). App:
+  `@react-native-firebase/app` + `@react-native-firebase/messaging`.
+- **Alternatives (server).** `firebase-admin` (the official SDK; pulls in Google Cloud client
+  libraries for one HTTP call). **(App)** Notifee (display control in the foreground; not
+  needed: Android displays notification messages, and foreground updates come through
+  realtime), Expo Notifications (Expo runtime), OneSignal and similar (third-party service).
+- **Why.** FCM is the Android push channel; the direct API keeps the server dependency-free.
+- **Trade-offs.** The OAuth token flow is our code (small and tested). React Native Firebase
+  requires a per-developer `google-services.json`; builds without it skip push. Delivery is not
+  guaranteed, which the design accepts (inbox + sync).
+
+### Object storage: an interface with a local-disk implementation
+
+- **Problem.** Store photo bytes outside PostgreSQL.
+- **Decision.** `ObjectStorage` (`put`, `get`, `delete`) with `LocalDiskObjectStorage`
+  under `STORAGE_DIR`; uploads go through the API (multipart, multer from
+  `@nestjs/platform-express`, already installed).
+- **Alternatives.** MinIO in Docker with presigned URLs (the V0 plan): another container on
+  an 8 GB development machine, and presigned direct uploads would bypass the server-side
+  byte inspection and metadata stripping. A managed store (S3, R2) now: needs an account and
+  network in development.
+- **Why.** Zero infrastructure now, same interface later.
+- **Trade-offs.** Single instance only (files on one disk); the API process carries the
+  upload bytes (fine for ≤10 MB photos). The S3-compatible implementation arrives with
+  multi-instance deployment.
+
+### In-process domain events
+
+- **Problem.** Jobs must trigger realtime and notifications without depending on them.
+- **Decision.** A tiny typed event bus (`src/events/domain-events.ts`) published after commit.
+- **Alternatives.** `@nestjs/event-emitter` (a dependency for a 60-line class); calling the
+  modules directly (couples jobs to delivery); a transactional outbox with BullMQ now
+  (Phase 5 scope, needs Redis).
+- **Trade-offs.** Not durable: a crash after commit loses that hint. Acceptable because every
+  consumer is best effort by design; Phase 5 makes it durable.
+
 ## Pending decisions
 
 These are deliberately deferred to the version where the information to decide exists.
@@ -379,8 +553,8 @@ These are deliberately deferred to the version where the information to decide e
 | Decision | Decide in | Leading option |
 | --- | --- | --- |
 | SQLite library | V5 | op-sqlite or expo-sqlite |
-| Runtime schema library for shared contracts | V3 | Zod schemas in `@fieldops/shared`, integrated with Nest validation and OpenAPI |
-| How the API consumes workspace packages (compiled vs source) | V3 | Compile shared packages with `tsc` project references |
+| Runtime schema library for shared *runtime* contracts (sync payloads) | V6 | Zod in `@fieldops/shared`, used on both sides, if sync payloads need validation on the device too |
+| How the API consumes workspace packages at runtime | When `@fieldops/shared` gets runtime code | Compile shared packages with `tsc` project references (V2 only needs type-only imports, which are erased) |
 | HTTP adapter | V19 (re-evaluate) | Express (default) unless benchmarks favor Fastify |
 | Local database encryption | V5 / V18 | SQLCipher-capable SQLite build with a Keystore-held key |
 | Hosting target | V16 | A managed container platform or a single VM with Compose; managed Postgres and Redis |
@@ -395,3 +569,11 @@ These are deliberately deferred to the version where the information to decide e
 | TypeScript major version | V1 | TypeScript 6.0 across the repository (typescript-eslint requires < 6.1) |
 | ESLint version and config format | V1 | ESLint 9 with flat config (the newest version React Native's config supports) |
 | Mobile environment configuration | V1 | react-native-config with per-build-type dotenv files |
+| API error format | V2 | `{ success, data }` / `{ success: false, error: { code, message, details?, requestId } }` envelope, not RFC 9457 ([api.md](api.md)) |
+| Backend validation library | V2 | class-validator DTOs (Nest-native, feeds OpenAPI). Shared *types* in `@fieldops/types`; Zod stays an option for runtime-shared schemas (pending above) |
+| Secure token storage on the device | V2 | react-native-keychain 10 (see [Backend libraries (V2)](#backend-libraries-v2)) |
+| Local PostgreSQL for development | V2 | Native PostgreSQL 18 install; Docker Compose deferred by the repository owner |
+| Roadmap structure | Phase 2 | Six phases ([master-development-plan.md](master-development-plan.md)); the V0–V19 list remains the internal breakdown ([phase-status.md](phase-status.md)) |
+| Mobile SQLite library | Phase 3 | react-native-nitro-sqlite (see [SQLite (mobile)](#sqlite-mobile)) |
+| Shared runtime package | Phase 3 | `@fieldops/shared` with the job state machine; source for bundlers, `dist/` for the API |
+| Location, photo capture, push, object storage, realtime | Phase 4 | See [Field operations (Phase 4)](#field-operations-phase-4) |

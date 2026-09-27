@@ -1,20 +1,40 @@
-# @fieldops/shared (reserved)
+# @fieldops/shared
 
-This directory is reserved. It does **not** contain code or a `package.json` yet. It will
-become a workspace package when the first genuinely shared runtime code exists. Creating an
-empty package now would only add noise.
+Framework-free runtime code used by both the API and the mobile app. Since Phase 3 it holds
+the **job state machine** (`src/job-state-machine.ts`): the API enforces transitions with it,
+and the phone validates the worker's offline commands and predicts their allowed actions with
+the same rules.
 
-## What will live here
+## Consumption
+
+| Consumer | Loads | How |
+| --- | --- | --- |
+| Type checking (all workspaces) | `src/*.ts` | `exports` condition `types` |
+| Metro (the app) | `src/*.ts` | `exports` condition `react-native` |
+| Jest (mobile), Vitest (API) | `src/*.ts` | `moduleNameMapper` / `resolve.alias` |
+| The running API (Node) | `dist/*.js` | `exports` condition `default`; built by `npm run build -w @fieldops/shared`, which the API's `prebuild` and `prestart*` scripts run |
+
+Each entry module is exported directly (no relative imports inside): Node ESM needs `.js`
+extensions on relative imports, while Metro resolves extensionless source. A new module gets
+its own export path.
+
+```bash
+npm test -w @fieldops/shared        # Vitest
+npm run build -w @fieldops/shared   # dist/ for the API
+```
+
+## Roadmap for this package
 
 Pure, framework-free TypeScript that both `apps/mobile` and `apps/api` need at runtime:
 
 | Planned content | Introduced in | Why it is shared |
 | --- | --- | --- |
-| API contract schemas (runtime validation of request/response payloads) | V3–V4 | Client and server validate the same shapes |
-| Job status state machine (allowed transitions) | V4 | The mobile app validates transitions offline; the server enforces them |
+| API contract schemas (runtime validation of request/response payloads) | V6 (sync), if needed | Client and server validate the same shapes. V2 shares contract *types* through `@fieldops/types` instead |
+| Job status state machine (allowed transitions) | **Phase 3 (here)** | The mobile app validates transitions offline; the server enforces them |
+| Distance between coordinates (`@fieldops/shared/geo`) | **Phase 4 (here)** | The server computes the authoritative distance from the job site; the phone shows the same estimate before sync |
 | Sync protocol envelopes and mutation type definitions | V6 | Both sides must agree on the sync protocol exactly |
 | Retry/backoff calculation | V6 | Same policy for mobile sync and server-side workers |
-| Realtime event names and payload schemas | V8 | WebSocket contract between gateway and client |
+| Realtime event names and payload schemas | Phase 4 | Delivered as *types* in `@fieldops/types` (`realtime.ts`): the payloads are hints (IDs and a status), each side validates what it reads, so no shared runtime schema was needed |
 
 ## Rules
 

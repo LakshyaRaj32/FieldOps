@@ -125,8 +125,8 @@ Rules:
 
 | Requirement | Provided by |
 | --- | --- |
-| Reusable, principal-based authorization policies | V2 (auth), V4 (job policies) |
-| Audit log supporting `actor_type = 'ai'` | V4 (audit writer design) |
+| Reusable, principal-based authorization policies | V2 (auth), Phase 2 (job policies: `apps/api/src/jobs/domain/job.policy.ts`) |
+| Audit log supporting `actor_type = 'ai'` | Phase 5 (audit writer) |
 | Rate limiting by user or organization | V11 |
 | Queue for long-running tasks | V12 |
 | Realtime or push delivery of async results | V8 / V9 |

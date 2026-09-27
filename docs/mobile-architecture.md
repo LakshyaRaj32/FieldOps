@@ -1,9 +1,17 @@
 # Mobile Architecture
 
-> Status: **Version 1 implemented** (foundation: project, navigation, state, connectivity, API
-> layer, environments, UI foundation, error handling). Later layers arrive in V2 (auth),
-> V5 (SQLite), V6 (sync), V7 (Kotlin location), V8 (realtime), V9 (push and media) and V14
-> (performance). How to run and develop the app: [mobile-development.md](mobile-development.md).
+> Status: **Phases 1–3 implemented** (Phase 1 / V1–V2: project, navigation, state,
+> connectivity, API layer, environments, UI foundation, error handling, real authentication,
+> secure token storage, session restore and token refresh, see
+> [authentication.md](authentication.md#8-mobile-app); Phase 2: the jobs feature, see
+> [Jobs (Phase 2)](#jobs-phase-2); Phase 3: SQLite, the outbox and the sync engine for the
+> worker's jobs, see [6. SQLite access layer](#6-sqlite-access-layer-phase-3)). Later layers arrive in V5 (SQLite), V6 (sync), V7 (Kotlin location), V8 (realtime), V9 (push and media) and V14
+> (performance). **Phase 4 (code written, awaiting verification):** Kotlin modules
+> `FieldOpsLocation` and `FieldOpsFiles`, `services/location`, `services/files`,
+> `services/media`, `services/realtime`, `services/push`, the notifications feature, and
+> local schema v2; see [9. Native modules](#9-native-modules-kotlin-v7) and
+> [Field operations (Phase 4)](#field-operations-phase-4). How to run and develop the app:
+> [mobile-development.md](mobile-development.md).
 
 ## 1. Goals
 
@@ -45,20 +53,24 @@ apps/mobile/src/
 │   ├── config/                 Environment parsing/validation (only importer of react-native-config)
 │   ├── navigation/             Root/Auth/App navigators, param-list types, navigation theme, screen layout
 │   └── providers/              AppProviders (safe area, Redux, theme, error boundary), AppServices
+├── assets/                     Images bundled with the app (brand-mark.png, rendered with the launcher icon)
 ├── components/
-│   ├── ui/                     Primitives: AppText, Button, Card, Badge, Screen, SegmentedControl
-│   └── common/                 App-aware composites: Loading/Error/Empty states, ErrorBoundary, ConnectivityBanner
+│   ├── ui/                     Primitives: AppText, Button, Card, Badge, Icon, Screen (keyboard-aware),
+│   │                           SectionTitle, SegmentedControl, Skeleton, TextField (+ FieldLabel/FieldMessage)
+│   └── common/                 App-aware composites: Loading/Error/Empty states, InfoRow, ErrorBoundary,
+│                               ConnectivityBanner, DateTimeField (native pickers), ImageViewer (full-screen zoom)
 ├── features/                   Vertical slices; each owns its screens and feature-local components
-│   ├── auth/                   Login (V1 placeholder with development entry; real sign-in in V2)
+│   ├── auth/                   Login, Register, auth endpoints, session thunks, form validation
 │   ├── dashboard/              Dashboard tab
-│   ├── jobs/                   Jobs tab (placeholder until V4)
-│   ├── notifications/          Notifications tab (placeholder until V9)
+│   ├── jobs/                   Jobs stack: list, details, create/edit, assign; job API, rules, components
+│   ├── notifications/          Notifications tab (placeholder until Phase 4)
 │   └── profile/                Account, theme preference, diagnostics
-├── hooks/                      Cross-feature hooks (useConnectivity)
+├── hooks/                      Cross-feature hooks (useConnectivity, useKeyboardInset)
 ├── services/                   Infrastructure wrappers; the only code allowed to touch these libraries
-│   ├── api/                    RTK Query base API, base query, request IDs, RTK Query listeners, health endpoint
+│   ├── api/                    RTK Query base API, base query (auth header, refresh), request IDs, listeners, health
+│   ├── auth/                   Credential store (sole owner of tokens), payload checks, session events
 │   ├── network/                Connectivity model (pure) and NetInfo service
-│   └── storage/                MMKV preferences storage with typed keys
+│   └── storage/                MMKV preferences (typed keys); Keystore-backed secure storage (keychain)
 ├── store/                      Redux store, typed hooks
 │   └── slices/                 Application-wide slices: session, connectivity
 ├── theme/                      Tokens, light/dark themes, ThemeProvider, theme preference
@@ -66,8 +78,8 @@ apps/mobile/src/
 ```
 
 **Growth plan.** New infrastructure goes into `services/` (for example `services/db` in V5,
-`services/sync` in V6, `services/native` in V7, `services/realtime` in V8, and secure token
-storage in `services/storage` in V2). Feature data access goes into `features/<feature>/api`
+`services/sync` in V6, `services/native` in V7, `services/realtime` in V8; V2 added
+`services/auth` and secure storage in `services/storage`). Feature data access goes into `features/<feature>/api`
 (RTK Query endpoints injected into the base API) and later `features/<feature>/data` (SQLite
 repositories).
 
@@ -88,7 +100,9 @@ repositories).
 - `services/` never imports from `features/` or `store/`. `app/providers/AppServices.tsx` is
   the single place that connects services to the store.
 - **ESLint boundaries:** `react-native-config` may only be imported in `app/config`, NetInfo
-  only in `services/network`, MMKV only in `services/storage`. The global `fetch` is forbidden
+  only in `services/network`, MMKV only in `services/storage`, the icon font
+  (`@react-native-vector-icons/*`) only in `components/ui/Icon.tsx`, and the date/time picker
+  only in `components/common/DateTimeField.tsx`. The global `fetch` is forbidden
   in app code (use the API layer), and `console` is forbidden outside `utils/logger.ts`.
 - Screens are thin: they compose hooks and components.
 
@@ -97,17 +111,18 @@ repositories).
 | # | Kind | Owner | Examples | Must not | V1 status |
 | --- | --- | --- | --- | --- | --- |
 | 1 | UI state | Component state; Redux slices when shared across screens | Form inputs, open sheets, selected filter | Hold domain entities as truth | Component state only |
-| 2 | Server state (online-only) | RTK Query | Manager dashboard, worker list, admin screens | Be used for offline-critical data | Base API + health check |
-| 3 | Persistent local application data | SQLite | Assigned jobs, job events, attachment metadata, messages | Be mirrored wholesale into Redux | V5 |
-| 4 | Offline mutations | SQLite outbox (same DB, same transaction as the domain write) | `job.complete`, `job.note.add` | Live anywhere in-memory-only | V5–V6 |
-| 5 | Synchronization state | SQLite (truth); Redux mirror for display | Cursor, pending count, failures | Be lost on restart | V6 |
+| 2 | Server state (online-only) | RTK Query | Manager dashboard, worker list, admin screens | Be used for offline-critical data | Base API + health check; Phase 2 jobs (interim, see [Jobs](#jobs-phase-2)) |
+| 3 | Persistent local application data | SQLite | Assigned jobs, job events, attachment metadata, messages | Be mirrored wholesale into Redux | Phase 3: the worker's jobs |
+| 4 | Offline mutations | SQLite outbox (same DB, same transaction as the domain write) | `job.complete`, `job.note.add` | Live anywhere in-memory-only | Phase 3: start, complete, note |
+| 5 | Synchronization state | SQLite (truth); React context for display | Pending count, failures, last sync | Be lost on restart | Phase 3 |
 | 6 | Native device capabilities | Kotlin modules and native buffers | Location capture, background scheduling | Depend on the JS thread being alive | V7 |
 
 Two additional stores exist for specific purposes:
 
 - **MMKV:** small key-value preferences and flags, typed keys only. V1 stores the theme
   preference (`ui.themePreference`).
-- **Keystore-backed secure storage:** tokens and credentials only (V2).
+- **Keystore-backed secure storage** (`react-native-keychain`, AES-GCM with a Keystore key):
+  the session credentials only, owned by `services/auth/credentialStore.ts` (V2).
 
 ## 5. Data flow
 
@@ -134,31 +149,51 @@ Two additional stores exist for specific purposes:
                                FieldOps API
 ```
 
-In V1 only the Redux and RTK Query paths exist.
+Since Phase 3, all paths exist for the worker's jobs. The reactive read hook is
+`useLocalQuery` (behind `useLocalJobs` / `useLocalJob`), and the sync engine lives with the
+feature (`features/jobs/data/syncEngine.ts`) rather than in `services/sync`: it is job-specific
+by design, not a generic framework.
 
-## 6. SQLite access layer (V5)
+## 6. SQLite access layer (Phase 3)
 
-- **One database connection** managed by `services/db`, opened and migrated during startup
-  before any screen renders data.
-- **Migrations** are versioned SQL files, forward-only, applied in a transaction and tested
-  against snapshots of older schemas.
-- **Repositories per feature** expose typed functions (`getAssignedJobs()`,
-  `completeJob(cmd)`). Raw SQL stays inside repositories.
-- **Transaction helper**: `db.transaction(async (tx) => { ... })` is the only way to write.
-  Every write that must sync also enqueues its outbox entry through `tx`.
-- **Reactive queries.** After each committed transaction, the data layer emits the set of
-  changed tables. `useLiveQuery(sql, deps, tables)` re-runs affected queries. This is a small,
-  explicit mechanism. We do not use a heavy ORM.
-- **Row validation.** Rows are mapped to domain types through typed mappers. JSON columns are
-  validated with the shared schemas.
+```text
+services/db/
+├── database.ts          SqlDatabase: async reads, synchronous work inside transaction()
+├── nitroDatabase.ts     device implementation (react-native-nitro-sqlite; sole importer, ESLint)
+└── migrations.ts        forward-only migrations in PRAGMA user_version, one transaction each
+features/jobs/data/
+├── localSchema.ts       migration 1: jobs (server_json + local_json), outbox, sync_state
+├── localJobStore.ts     the repository: reads, local commands, outbox state, working-set apply
+├── projection.ts        local view = server copy + pending commands (pure)
+├── syncEngine.ts        push outbox → pull working set; retry, conflicts, single flight
+├── retryPolicy.ts       failure classification and backoff
+├── apiTransport.ts      engine ⇄ API through RTK Query (auth, refresh, error mapping)
+├── offlineSession.ts    one database file per worker; open, migrate, release
+├── OfflineJobsProvider.tsx  session lifecycle + sync triggers (start, foreground, reconnect)
+└── OfflineJobsContext.ts    useOfflineJobs, useLocalJobs, useLocalJob, useProblemEntries
+testing/
+├── nodeSqliteDatabase.ts    SqlDatabase on node:sqlite for tests (real SQLite in Jest)
+└── fakeJobServer.ts         the API's rules + fault injection, for engine tests
+```
+
+- **One database per worker**, opened (and migrated before anything reads) at sign-in or
+  offline session restore. Managers do not get one: their screens are online.
+- **Writes only in transactions**; every local command writes its outbox entry and the
+  recomputed local view together.
+- **Reactive reads:** the store notifies subscribers after each committed transaction;
+  `useLocalQuery` re-runs its read. Small and explicit, no ORM.
+- **Row validation:** stored jobs are parsed with the same runtime guard as API responses
+  (`isJobDetail`).
+- Details and policies: [offline-first.md](offline-first.md#as-built-in-phase-3) and
+  [synchronization.md](synchronization.md#as-built-in-phase-3).
 
 ## 7. Redux Toolkit and RTK Query
 
-**Slices implemented in V1** (`src/store/slices`):
+**Slices** (`src/store/slices`):
 
 | Slice | Contents |
 | --- | --- |
-| `session` | Discriminated union: `signedOut`, or `signedIn` with `{ displayName, role }` and `source: 'development'`. V2 replaces the development source with real sessions. Tokens will never be stored here |
+| `session` | Discriminated union: `restoring` (start-up, reading secure storage), `signedOut` (with an optional reason: `signedOut` or `sessionEnded`), or `signedIn` with the `UserProfile`. **Tokens are never stored here**, not even in actions; see [authentication.md](authentication.md#8-mobile-app) |
 | `connectivity` | Latest status, connection type and reachability; `lastChangedAt`; `recoveringFromOffline` and `restoredAt` so the UI can show "Reconnecting…" and "Back online" |
 | `api` | The RTK Query cache (`baseApi.reducer`) |
 
@@ -193,20 +228,34 @@ RootNavigator (native stack, NavigationContainer themed from the app theme)
 │   └── Login
 └── App    (mounted while signed in)   → AppNavigator (bottom tabs)
     ├── Dashboard
-    ├── Jobs
+    ├── Jobs      → JobsNavigator (native stack, Phase 2)
+    │   ├── JobList        "My jobs" for workers, "Jobs" for managers
+    │   ├── JobDetail
+    │   ├── JobForm        create / edit (managers)
+    │   └── AssignWorker   (managers)
     ├── Notifications
     └── Profile
 ```
 
 - Exactly one of `Auth` or `App` is mounted, chosen from session state. Signing out unmounts
   every authenticated screen, so back navigation cannot return to it.
-- Both navigators use `screenLayout` to render the connectivity banner below the header on
-  every screen.
+- Navigators use `screenLayout` to render the connectivity banner below the header on every
+  screen. The Jobs tab hides its own header and plain-wraps its stack, whose screens get the
+  banner below the stack header instead.
 - Param lists are typed (`app/navigation/types.ts`) and registered globally, so
   `useNavigation()` is type-checked.
-- V2 adds Register/ForgotPassword to `AuthNavigator` if needed.
+- `AuthNavigator` has Login and Register (V2). While the session is `restoring`, the root
+  renders a loading screen instead of either navigator, so the sign-in screen never flashes
+  for a signed-in user. Password reset is future work.
 
-**Planned evolution (V4+):** role-specific tabs, for example:
+**Tab icons (UI/UX phase).** Every tab has an Ionicons icon: filled while active, outline
+while inactive, so the active tab differs by shape as well as color. The Notifications tab
+shows the unread count as a badge and in its accessibility label. The tab bar hides while the
+keyboard is open, so forms get the full height.
+
+**Phase 2 kept one tab set for every role.** Role differences live inside the screens
+(list title, assignee shown, "New job") and, above all, in the server's `allowedActions`.
+**Planned evolution:** role-specific tabs once there is more role-specific content, for example:
 
 ```text
 WorkerTabs  (WORKER)            Today / Jobs → JobDetail → Capture, Messages, Profile
@@ -215,7 +264,77 @@ ManagerTabs (MANAGER | ADMIN)   Dashboard, Jobs → JobDetail → Assign, Map, M
 
 Client-side role routing is **for UX only**. The server authorizes every operation.
 
+## Jobs (Phase 2)
+
+`features/jobs/`:
+
+```text
+jobs/
+├── api/jobsApi.ts        RTK Query endpoints (list = infinite query with cursors, details, commands, workers)
+├── api/contracts.ts      Runtime checks of every job payload before it enters the cache
+├── presentation.ts       Labels, badge tones, schedule formatting, list views, job commands
+├── jobForm.ts            Manager form: validation mirroring the API, create/update requests
+├── components/           JobCard, JobStatusBadge, JobPriorityBadge
+└── screens/              JobsScreen (list), JobDetailScreen, JobFormScreen, AssignWorkerScreen
+```
+
+- **The server decides what a user may do.** Every job carries `allowedActions`;
+  `jobCommands()` turns exactly those into buttons ("Start job" for the assigned worker on an
+  assigned job, "Complete job" once in progress; assign/edit/cancel/delete for managers). The
+  app makes no role or status decision of its own, so it can never offer an action the server
+  would reject.
+- **Every command invalidates the job and the lists, even when it fails.** A
+  `VERSION_CONFLICT` or `INVALID_STATUS_TRANSITION` means the screen shows a stale job; the
+  refetch brings it up to date and the app explains what happened.
+- **Responses are validated** (`queryFn` + guards); a malformed body becomes a `parse` error,
+  shown by the normal error state.
+- **Data sources since Phase 3.** Workers: SQLite (`WorkerJobDetail`, the worker list and
+  dashboard), with commands through the local store and the outbox. Managers and admins: RTK
+  Query (`ManagerJobDetail`, the manager list), online by design. The split is by role, in
+  one place per screen (`JobsScreen`, `JobDetailScreen`), and shared rendering lives in
+  `components/JobDetailSections.tsx`.
+- **Sync status UI.** `SyncStatusBanner` (below the connectivity banner on every screen, only
+  when something is unsynced or rejected), a badge per job ("Waiting to sync", "Needs
+  attention"), `SyncProblemList` (reason, Dismiss, Try again) and `SyncCard` on Profile with
+  "Sync now".
+
+## Field operations (Phase 4)
+
+```text
+services/native/        codegen specs: NativeFieldOpsLocation.ts, NativeFieldOpsFiles.ts
+services/location/      permission + one fix → LocationResult (locationService, locationResult)
+services/files/         evidence files in app-private storage (FieldOpsFiles)
+services/media/         photo capture/choice (react-native-image-picker; sole importer)
+services/realtime/      RealtimeClient (socket.io-client; sole importer), envelope checks
+services/push/          FCM (React Native Firebase; sole importer)
+features/jobs/          outbox commands job.evidence.add, job.message.send; locations on
+                        start/complete; FieldOperationSections, WorkerLocationPanel,
+                        MessageComposer; schema v2 (evidence_files)
+features/notifications/ inbox API + screen, notificationRouting (push data → route)
+app/providers/          RealtimeConnection (resync on events/reconnect), PushNotifications
+app/navigation/         navigationRef (open a job from a notification, also on cold start)
+hooks/useLiveUpdates    realtime and push status for display
+```
+
+All new worker writes follow the Phase 3 write path (one SQLite transaction: outbox entry +
+local view); realtime and push only trigger the existing sync. See [location.md](location.md),
+[realtime.md](realtime.md), [notifications.md](notifications.md), [evidence.md](evidence.md).
+
 ## 9. Native modules (Kotlin, V7+)
+
+**As built in Phase 4** (both Turbo Modules from specs in `src/services/native`, registered by
+`FieldOpsPackage.kt`; `codegenConfig` in `package.json`):
+
+| Module | Responsibility |
+| --- | --- |
+| `FieldOpsLocation` | Location enabled?, one foreground fix (LocationManager), open location settings |
+| `FieldOpsFiles` | Copy a picked photo into `files/evidence`, check, delete (confined to that directory) |
+
+`MainApplication.kt` also creates the `jobs` notification channel. The planned modules
+below (`LocationTracking`, `BackgroundSync`) are not built: no workflow needs background
+tracking yet, and background sync (WorkManager) remains later work.
+
+The original plan:
 
 | Module | Responsibility | Android APIs |
 | --- | --- | --- |
@@ -240,8 +359,12 @@ factory that react-native-screens requires.
 
 ## 10. Networking, connectivity and environments
 
-- **One HTTP entry point** (`services/api/baseQuery.ts`). V2 adds the Authorization header and
-  single-flight token refresh on `401` there.
+- **One HTTP entry point** (`services/api/baseQuery.ts`). It adds the `Authorization` header
+  per request, unwraps the `{ success, data }` envelope, and on a `401` to an authenticated
+  request performs one refresh shared by all concurrent requests (single flight), then retries
+  once. A `4xx` from the refresh ends the session; offline or `5xx` keeps it. The base query
+  reaches the credential store through the store's thunk extra argument, so tests inject an
+  in-memory store.
 - **Connectivity** (`services/network`): NetInfo's two facts (connected, internet reachable)
   are folded into one status: `unknown`, `checking` (connected, not yet verified), `online` or
   `offline` (including Wi-Fi without internet). It is a hint for the UI and for triggering work,
@@ -250,7 +373,8 @@ factory that react-native-screens requires.
   react-native-config and are validated at startup (`parseEnv`). An invalid build shows a
   configuration error screen instead of calling the wrong server. Details:
   [mobile-development.md](mobile-development.md#api-environments).
-- Responses from the future backend will be validated at runtime with shared schemas (V3–V4).
+- Auth responses and restored credentials are checked at runtime (`services/auth/contracts.ts`)
+  before the app trusts them. Shared runtime schemas for larger payloads arrive with sync (V6).
 - WebSocket client (V8): authenticated on connect, reconnects with backoff, events validated
   against shared schemas, and events trigger sync rather than directly mutating data.
 
@@ -258,7 +382,7 @@ factory that react-native-screens requires.
 
 | Failure | Handling |
 | --- | --- |
-| API failure (network, timeout, HTTP, unreadable response) | `createBaseQuery` maps it to an `AppError` with a user-safe `message`, optional `status`, Problem Details `code` and `requestId`, and logs it with `logger.warn` |
+| API failure (network, timeout, HTTP, unreadable response) | `createBaseQuery` maps it to an `AppError` with a user-safe `message` (the app's own copy per error `code`; never server text for `5xx`), optional `status`, `code`, field `details` and `requestId`, and logs it with `logger.warn` |
 | Any error shown in the UI | `ErrorState` normalizes any value with `toAppError()`. Technical detail is logged and never shown as the message |
 | Render error | `ErrorBoundary` (inside the theme provider) logs it and shows a recovery screen with "Try again" |
 | Uncaught JavaScript error | `installGlobalErrorHandler()` logs it, then hands it to React Native's default handler (red box in development, crash in release). Errors are never swallowed |
@@ -288,7 +412,8 @@ factory that react-native-screens requires.
   `apps/mobile/.env.*` is compiled into the APK. The files hold public settings only.
 - Release-like builds (staging, release) block cleartext HTTP. Configuration validation also
   requires `https` outside development.
-- Tokens in Keystore-backed secure storage only (V2). No secrets are bundled in the app.
+- Tokens in Keystore-backed secure storage only (V2), never in Redux, MMKV or logs. No secrets
+  are bundled in the app.
 - Local database encryption evaluated in V5 and enforced by V18. Certificate pinning evaluated
   in V18.
 - Logs never contain tokens, passwords or personal data. Crash reports are scrubbed.

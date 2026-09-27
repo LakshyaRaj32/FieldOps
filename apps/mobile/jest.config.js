@@ -2,6 +2,16 @@
 module.exports = {
   preset: '@react-native/jest-preset',
   setupFiles: ['<rootDir>/jest.setup.js'],
+  // @fieldops/shared ships compiled JavaScript for Node; the app (Metro) and its tests use
+  // the TypeScript source.
+  moduleNameMapper: {
+    '^@fieldops/shared$':
+      '<rootDir>/../../packages/shared/src/job-state-machine.ts',
+    '^@fieldops/shared/geo$': '<rootDir>/../../packages/shared/src/geo.ts',
+    '^@fieldops/shared/requirements$':
+      '<rootDir>/../../packages/shared/src/operation-requirements.ts',
+    '^@fieldops/shared/money$': '<rootDir>/../../packages/shared/src/money.ts',
+  },
   testPathIgnorePatterns: ['/node_modules/', '<rootDir>/android/'],
   // Packages resolved through their "react-native" export condition ship ES modules and must
   // be transformed by Babel (the preset only allow-lists React Native packages).

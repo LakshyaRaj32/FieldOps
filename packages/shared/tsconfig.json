@@ -1,0 +1,10 @@
+{
+  "extends": "@fieldops/config/tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["vitest/globals"],
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "*.ts"]
+}

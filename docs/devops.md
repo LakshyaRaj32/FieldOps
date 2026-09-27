@@ -1,7 +1,10 @@
 # DevOps Architecture
 
-> Status: **design (Version 0).** Local Docker infrastructure starts in V3. Full
-> containerization and CI/CD come in V16. Observability comes in V15.
+> Status: **design (Version 0), backend deployable since Version 2.** The API reads all
+> configuration from the environment and is ready for a PaaS or container host
+> ([backend-development.md](backend-development.md#7-staging-preparation)). Local PostgreSQL
+> runs natively for now; Docker Compose is adopted later. Full containerization and CI/CD come
+> in V16. Observability comes in V15.
 
 ## 1. Goals
 
@@ -27,7 +30,7 @@
 
 | Version | `infra/docker/compose.yaml` services |
 | --- | --- |
-| V3 | `postgres` (pinned major version, named volume, healthcheck) |
+| Later | `postgres` (pinned major version, named volume, healthcheck). Until then: native PostgreSQL 18 |
 | V9 | `minio` (S3-compatible object storage) |
 | V10 | `redis` |
 | V15 | Optional `observability` profile: OpenTelemetry Collector, Prometheus, Grafana |

@@ -6,9 +6,8 @@ export interface LivenessResult {
 }
 
 /**
- * API liveness check, used by the diagnostics panel to verify environment configuration and
- * reachability from the device. The `/health/live` endpoint is part of the Version 3 backend;
- * until then this reports the API as unreachable, which is the correct result.
+ * API liveness check (GET /health/live), used by the diagnostics panel to verify environment
+ * configuration and reachability from the device.
  */
 export const healthApi = baseApi.injectEndpoints({
   endpoints: build => ({

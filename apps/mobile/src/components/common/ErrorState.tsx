@@ -1,12 +1,12 @@
 import React from 'react';
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { useTheme } from '../../theme';
 import { toAppError } from '../../utils/errors';
-import { AppText, Button } from '../ui';
+import { AppText, Button, Icon } from '../ui';
 
 export interface ErrorStateProps {
-  /** Any error value; it is normalized into a user-facing message. */
+  /** Any error value; it is normalized into a user-facing message (never the raw error). */
   readonly error: unknown;
   readonly title?: string;
   readonly onRetry?: () => void;
@@ -24,25 +24,44 @@ export function ErrorState({
   return (
     <View
       accessibilityRole="alert"
-      style={{
-        gap: theme.spacing.sm,
-        padding: theme.spacing.md,
-        borderRadius: theme.radii.md,
-        backgroundColor: theme.colors.dangerMuted,
-      }}
+      style={[
+        styles.container,
+        {
+          gap: theme.spacing.md,
+          padding: theme.spacing.md,
+          borderRadius: theme.radii.md,
+          backgroundColor: theme.colors.dangerMuted,
+        },
+      ]}
     >
-      <AppText variant="bodyStrong" tone="danger">
-        {title}
-      </AppText>
-      <AppText>{appError.message}</AppText>
-      {appError.requestId !== undefined ? (
-        <AppText variant="caption" tone="muted" selectable>
-          Reference: {appError.requestId}
+      <Icon name="alert-circle" tone="danger" />
+      <View style={[styles.body, { gap: theme.spacing.xs }]}>
+        <AppText variant="bodyStrong" tone="danger">
+          {title}
         </AppText>
-      ) : null}
-      {onRetry !== undefined ? (
-        <Button label="Try again" onPress={onRetry} variant="secondary" />
-      ) : null}
+        <AppText>{appError.message}</AppText>
+        {appError.requestId !== undefined ? (
+          <AppText variant="caption" tone="muted" selectable>
+            Reference: {appError.requestId}
+          </AppText>
+        ) : null}
+        {onRetry !== undefined ? (
+          <Button
+            label="Try again"
+            icon="refresh"
+            onPress={onRetry}
+            variant="secondary"
+            size="sm"
+            style={[styles.retry, { marginTop: theme.spacing.xs }]}
+          />
+        ) : null}
+      </View>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flexDirection: 'row', alignItems: 'flex-start' },
+  body: { flex: 1 },
+  retry: { alignSelf: 'flex-start' },
+});

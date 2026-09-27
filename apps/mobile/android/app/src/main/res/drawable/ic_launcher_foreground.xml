@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FieldOps launcher icon, foreground layer: a map pin with a check mark (work done on
+  site). 108 x 108 adaptive canvas; everything stays inside the central 66 dp safe zone.
+  The legacy PNGs in mipmap-*dpi are rendered from the same geometry.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Ground shadow under the pin. -->
+    <path
+        android:fillColor="#50FFFFFF"
+        android:pathData="M43,83.5 A11,2.6 0 1,0 65,83.5 A11,2.6 0 1,0 43,83.5 Z" />
+    <!-- Pin. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,80 L37.23,60.24 A22,22 0 1,1 70.77,60.24 Z" />
+    <!-- Check mark. -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF2F5BEA"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M43.5,46.5 L51,54 L64.5,39.5" />
+</vector>

@@ -1,7 +1,16 @@
 # FieldOps Architecture
 
-> Status: **target architecture; built through Version 1** (repository foundation and mobile
-> app foundation). Anything not yet built is labeled with the version that introduces it. For
+> Status: **target architecture; built through Phase 3 (Offline-First), Phase 4 (Field
+> Operations) code written and awaiting verification** (location, realtime, notifications,
+> evidence, messages: [location.md](location.md), [realtime.md](realtime.md),
+> [notifications.md](notifications.md), [evidence.md](evidence.md)). Phase 1 built the
+> repository, the mobile foundation, the backend and authentication; Phase 2 built jobs
+> (model, assignment, state machine, history, worker and manager screens); Phase 3 built the
+> offline path for workers (SQLite, outbox, sync engine, server idempotency, conflicts; see
+> [synchronization.md](synchronization.md#as-built-in-phase-3)). The project is
+> managed in six phases ([master-development-plan.md](master-development-plan.md),
+> [phase-status.md](phase-status.md)); older text labels future work with the former version
+> numbers (V5 and later), which map to phases in phase-status.md. For
 > the reasoning behind each technology, see [technology-decisions.md](technology-decisions.md).
 
 ## 1. Purpose
@@ -76,14 +85,14 @@ measurements, not a goal in itself.
 FieldOps/
 ├── apps/
 │   ├── mobile/        React Native + TypeScript (+ Kotlin under android/)      V1
-│   └── api/           NestJS + TypeScript + Prisma                            V3
+│   └── api/           NestJS + TypeScript + Prisma                            V2
 ├── packages/
 │   ├── config/        Shared tooling config (strict tsconfig base)            V0
 │   ├── types/         Shared domain/contract types (Role, ...)                V0
 │   └── shared/        Shared framework-free runtime code (schemas, state      reserved
 │                      machines, sync protocol, backoff)
 ├── infra/
-│   └── docker/        Local infrastructure (Compose) and image builds          V3+
+│   └── docker/        Local infrastructure (Compose) and image builds          later
 └── docs/              Architecture and decision documentation                 V0
 ```
 
@@ -110,7 +119,9 @@ Knowing where each kind of data lives, and which copy wins, prevents most offlin
 | Transient UI state (open modals, form input, filters, current screen) | **Redux** / component state | Throwaway; may be lost on app restart |
 | Small device preferences and flags | **MMKV** | Not relational, not for domain data |
 | Tokens and credentials on the device | **Android Keystore-backed secure storage** | Never in MMKV plaintext, Redux persistence or SQLite |
-| Binary media (photos, signatures, documents) | **Object storage** (server); device file system (client, until uploaded) | Postgres stores metadata and references only |
+| Binary media (photos, signatures, documents) | **Object storage** (server); device file system (client, until uploaded) | Postgres stores metadata and references only. Phase 4: local-disk implementation behind `ObjectStorage` |
+| Realtime delivery | **Nothing** (WebSocket events are hints) | Missed events are recovered by sync ([realtime.md](realtime.md)) |
+| Push delivery | **Nothing** (FCM is best effort) | The inbox (`notifications`) is the durable record ([notifications.md](notifications.md)) |
 | Cache, rate-limit counters, locks, queue state, realtime fan-out | **Redis** | Losing Redis may degrade the service but must never lose business data |
 
 ## 6. Core architectural decisions
@@ -161,7 +172,11 @@ document and [technology-decisions.md](technology-decisions.md).
 
 ## 7. Conceptual domain model
 
-This is the initial model. The Prisma schema in V3–V4 will refine it.
+This is the initial model. V2 implemented `User` and `Session`; Phase 2 implemented `Job`,
+job history (`JobEvent`) and checklist items ([database.md](database.md)). Phase 2 keeps the
+current assignee on the job row and assignment history in `JobEvent` instead of a separate
+`JobAssignment` table (one worker per job is all the workflow needs). Organizations are not
+built yet: the deployment is a single organization.
 
 ```text
 Organization 1───* User (role: WORKER | MANAGER | ADMIN)
@@ -187,19 +202,23 @@ a whole row. Most offline writes therefore do not conflict at all. See
 The shared role vocabulary is defined in `packages/types/src/role.ts`. Enforcement is
 implemented in V2 onward.
 
-| Capability | WORKER | MANAGER | ADMIN |
-| --- | :---: | :---: | :---: |
-| View jobs assigned to self | ✅ | ✅ | ✅ |
-| Update status / add evidence on own assigned jobs | ✅ | — | — |
-| View all jobs in the organization | — | ✅ | ✅ |
-| Create, edit, assign, reassign, cancel jobs | — | ✅ | ✅ |
-| Share own location while on duty | ✅ | — | — |
-| View worker locations (on-duty only) | — | ✅ | ✅ |
-| Message assigned workers / managers | ✅ | ✅ | ✅ |
-| Receive operational notifications | ✅ (own jobs) | ✅ | ✅ |
-| Manage users and roles | — | — | ✅ |
-| Organization configuration | — | — | ✅ |
-| Read audit log | — | limited (own team's jobs) | ✅ |
+| Capability | WORKER | MANAGER | ORGANIZATION_ADMIN | SUPER_ADMIN |
+| --- | :---: | :---: | :---: | :---: |
+| Work on operations assigned to self (accept, travel, submit, evidence) | ✅ | — | — | — |
+| View operations | own | team and own shops (org-wide with `organizationWideAccess`) | organization | — |
+| Create, assign, verify, reject, reschedule, cancel operations | — | ✅ (in scope) | ✅ | — |
+| Shops: view, assign people / create, edit | — | ✅ (own) / — | ✅ / ✅ | — |
+| Orders and shop accounts | — | ✅ (own shops) | ✅ | — |
+| Products | read | read | ✅ | — |
+| Members, roles, teams, organization settings | — | — | ✅ | — |
+| Read audit log | — | — | ✅ (organization) | ✅ (platform) |
+| Create, suspend organizations and their admins | — | — | — | ✅ |
+| Message assigned workers / managers | ✅ | ✅ | ✅ | — |
+| Receive operational notifications | ✅ (own) | ✅ | ✅ | — |
+
+The multi-tenant phase replaced `ADMIN` with `ORGANIZATION_ADMIN` and added `SUPER_ADMIN`
+and organizations. Scopes, tenant isolation and the business rules are described in
+[business-domain.md](business-domain.md).
 
 **How authorization works:**
 
@@ -237,8 +256,9 @@ implemented in V2 onward.
 - **Time.** Stored and transmitted in UTC ISO-8601. Client timestamps are recorded as
   `occurredAt` (when the worker did it). Server timestamps (`receivedAt`, change sequence) are
   authoritative for ordering and sync. Device clocks are never trusted for correctness.
-- **API errors.** RFC 9457 Problem Details (`application/problem+json`) with stable,
-  machine-readable error codes.
+- **API errors.** A consistent envelope, `{ success: false, error: { code, message } }`, with
+  stable, machine-readable error codes (V2 replaced the planned RFC 9457 Problem Details; see
+  [api.md](api.md)).
 - **API versioning.** URI-versioned (`/api/v1`). The sync protocol also carries its own
   `protocolVersion`, because old app versions stay in the field for a long time.
 - **Correlation.** Every request carries or receives a request ID, which is propagated into
@@ -250,8 +270,9 @@ implemented in V2 onward.
 ## 11. Security baseline (applies from the first line of code)
 
 - Passwords hashed with **Argon2id**. Short-lived JWT access tokens and rotating refresh tokens
-  stored **hashed** server-side, with reuse detection (V2).
-- Tokens stored on the device in Keystore-backed secure storage.
+  stored **hashed** server-side, with reuse detection (implemented in V2, see
+  [authentication.md](authentication.md)).
+- Tokens stored on the device in Keystore-backed secure storage (`react-native-keychain`).
 - HTTPS everywhere outside local development. WebSocket connections authenticate on handshake.
 - Authorization checked on the server for every operation, including every sync mutation
   individually. Client-side role checks are only for UX.

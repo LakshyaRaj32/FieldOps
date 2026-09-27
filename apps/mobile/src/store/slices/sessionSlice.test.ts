@@ -1,43 +1,63 @@
-import { Role } from '@fieldops/types';
+import { Role, type UserProfile } from '@fieldops/types';
 
+import { sessionEnded } from '../../services/auth/sessionEvents';
 import { createAppStore } from '../index';
 import {
-  developmentSessionStarted,
   selectSessionUser,
-  signOut,
+  selectSignedOutReason,
+  signedIn,
+  signedOut,
+  userUpdated,
 } from './sessionSlice';
 
+const user: UserProfile = {
+  id: 'user-1',
+  email: 'asha@example.com',
+  firstName: 'Asha',
+  lastName: 'Verma',
+  role: Role.WORKER,
+  isActive: true,
+  organization: null,
+  organizationWideAccess: false,
+  createdAt: '2026-01-01T00:00:00.000Z',
+};
+
 describe('session state', () => {
-  it('starts signed out', () => {
+  it('starts restoring, so no screen renders before the stored session is read', () => {
     const store = createAppStore();
-    expect(store.getState().session).toEqual({ status: 'signedOut' });
+    expect(store.getState().session).toEqual({ status: 'restoring' });
   });
 
-  it.each([Role.WORKER, Role.MANAGER, Role.ADMIN])(
-    'starts a development session as %s',
-    role => {
-      const store = createAppStore();
-      store.dispatch(developmentSessionStarted(role));
-
-      const { session } = store.getState();
-      expect(session.status).toBe('signedIn');
-      expect(selectSessionUser(store.getState())?.role).toBe(role);
-      expect(session.status === 'signedIn' && session.source).toBe(
-        'development',
-      );
-    },
-  );
-
-  it('signs out and clears cached server state', () => {
+  it('signs in with the user profile only', () => {
     const store = createAppStore();
-    store.dispatch(developmentSessionStarted(Role.MANAGER));
-    const apiStateBefore = store.getState().api;
+    store.dispatch(signedIn(user));
 
-    store.dispatch(signOut());
+    expect(store.getState().session).toEqual({ status: 'signedIn', user });
+    expect(selectSessionUser(store.getState())).toEqual(user);
+  });
 
+  it('updates the profile of a signed-in user and ignores updates otherwise', () => {
+    const store = createAppStore();
+    store.dispatch(userUpdated({ ...user, role: Role.MANAGER }));
+    expect(store.getState().session.status).toBe('restoring');
+
+    store.dispatch(signedIn(user));
+    store.dispatch(userUpdated({ ...user, role: Role.MANAGER }));
+    expect(selectSessionUser(store.getState())?.role).toBe(Role.MANAGER);
+  });
+
+  it('records why the user was signed out', () => {
+    const store = createAppStore();
+    store.dispatch(signedIn(user));
+
+    store.dispatch(sessionEnded());
+    expect(store.getState().session).toEqual({
+      status: 'signedOut',
+      reason: 'sessionEnded',
+    });
+    expect(selectSignedOutReason(store.getState())).toBe('sessionEnded');
+
+    store.dispatch(signedOut(undefined));
     expect(store.getState().session).toEqual({ status: 'signedOut' });
-    // resetApiState replaces the RTK Query slice with a fresh initial state.
-    expect(store.getState().api).not.toBe(apiStateBefore);
-    expect(store.getState().api.queries).toEqual({});
   });
 });

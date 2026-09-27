@@ -41,6 +41,23 @@ module.exports = [
             boundary('react-native-config', 'src/app/config'),
             boundary('@react-native-community/netinfo', 'src/services/network'),
             boundary('react-native-mmkv', 'src/services/storage'),
+            boundary('react-native-keychain', 'src/services/storage'),
+            boundary('react-native-nitro-sqlite', 'src/services/db'),
+            boundary('socket.io-client', 'src/services/realtime'),
+            boundary('react-native-image-picker', 'src/services/media'),
+            boundary('@react-native-firebase/app', 'src/services/push'),
+            boundary('@react-native-firebase/messaging', 'src/services/push'),
+            boundary(
+              '@react-native-community/datetimepicker',
+              'src/components/common/DateTimeField.tsx',
+            ),
+          ],
+          patterns: [
+            {
+              group: ['@react-native-vector-icons/*'],
+              message:
+                'Import icons only inside src/components/ui/Icon.tsx. Use <Icon> instead.',
+            },
           ],
         },
       ],
@@ -52,7 +69,21 @@ module.exports = [
     rules: { 'no-restricted-imports': 'off' },
   },
   {
-    files: ['src/services/network/**', 'src/services/storage/**'],
+    files: [
+      'src/services/network/**',
+      'src/services/storage/**',
+      'src/services/db/**',
+      'src/services/realtime/**',
+      'src/services/media/**',
+      'src/services/push/**',
+    ],
+    rules: { 'no-restricted-imports': 'off' },
+  },
+  {
+    files: [
+      'src/components/ui/Icon.tsx',
+      'src/components/common/DateTimeField.tsx',
+    ],
     rules: { 'no-restricted-imports': 'off' },
   },
   {

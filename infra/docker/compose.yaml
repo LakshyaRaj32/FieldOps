@@ -1,0 +1,66 @@
+name: fieldops
+
+services:
+  # ===========================================================================
+  # PostgreSQL 18 Database
+  # ===========================================================================
+  postgres:
+    image: postgres:18-bookworm
+    container_name: fieldops-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fieldops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fieldops}
+      POSTGRES_DB: ${POSTGRES_DB:-fieldops_dev}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fieldops} -d ${POSTGRES_DB:-fieldops_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fieldops-network
+
+  # ===========================================================================
+  # FieldOps API Backend
+  # ===========================================================================
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: fieldops-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: development
+      PORT: 3000
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fieldops}:${POSTGRES_PASSWORD:-fieldops}@postgres:5432/${POSTGRES_DB:-fieldops_dev}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-local-dev-access-secret-minimum-32-chars-long!}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-local-dev-refresh-secret-minimum-32-chars-long!}
+      ACCESS_TOKEN_EXPIRATION: 15m
+      REFRESH_TOKEN_EXPIRATION: 30d
+      SWAGGER_ENABLED: "true"
+      STORAGE_DIR: /app/apps/api/storage
+      RUN_MIGRATIONS: "true"
+    ports:
+      - "3000:3000"
+    volumes:
+      - api_storage:/app/apps/api/storage
+    networks:
+      - fieldops-network
+
+volumes:
+  postgres_data:
+    name: fieldops_postgres_data
+  api_storage:
+    name: fieldops_api_storage
+
+networks:
+  fieldops-network:
+    name: fieldops-network

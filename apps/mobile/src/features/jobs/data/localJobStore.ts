@@ -1,0 +1,847 @@
+import { nextStatus, type JobTransition } from '@fieldops/shared';
+import { submissionProblems } from '@fieldops/shared/requirements';
+import type {
+  DeviceLocation,
+  JobDetail,
+  JobStatus,
+  JobWorkingSet,
+  Product,
+  SubmitJobRequest,
+  UserSummary,
+} from '@fieldops/types';
+
+import {
+  integer,
+  optionalText,
+  text,
+  type SqlDatabase,
+  type SqlRow,
+  type SqlTransaction,
+} from '../../../services/db/database';
+import { uuidv7 } from '../../../utils/uuid';
+import { isJobDetail } from '../api/contracts';
+import { isProductList } from '../../catalog/api/contracts';
+import { projectJob } from './projection';
+import {
+  LocalCommandError,
+  type EvidencePayload,
+  type EvidenceUploadState,
+  type LocalEvidenceFile,
+  type LocalJob,
+  type OutboxCommand,
+  type OutboxCounts,
+  type OutboxEntry,
+  type OutboxError,
+  type OutboxType,
+  type StatusPayload,
+  type SubmitPayload,
+} from './types';
+
+/** Outbox statuses that still change what the worker sees. */
+const ACTIVE = "('pending', 'in_flight')";
+/** Outbox statuses that need the worker's attention. */
+const PROBLEM = "('failed', 'conflict')";
+
+const JOB_COLUMNS = `local_json,
+  (SELECT count(*) FROM outbox o WHERE o.job_id = jobs.id AND o.status IN ${ACTIVE}) AS pending_changes,
+  (SELECT count(*) FROM outbox o WHERE o.job_id = jobs.id AND o.status IN ${PROBLEM}) AS problems`;
+
+export interface LocalJobStoreOptions {
+  readonly db: SqlDatabase;
+  /** The signed-in worker (author of offline notes). */
+  readonly me: UserSummary;
+  readonly now?: () => Date;
+}
+
+/**
+ * Fields added to JobDetail after a job may have been stored (schema v1 wrote jobs before
+ * Phase 4). Filled with their empty values when read; the next sync stores the server's.
+ */
+const PHASE_4_DEFAULTS = {
+  startLocation: null,
+  completeLocation: null,
+  evidence: [],
+  messages: [],
+} as const;
+
+/**
+ * Fields added with operations (schema v3). A job stored before them is a GENERAL job; its
+ * responsible manager is its creator (the same backfill the server's migration made).
+ */
+const OPERATION_DEFAULTS = {
+  type: 'GENERAL',
+  shop: null,
+  expectedAmount: null,
+  order: null,
+  lines: [],
+  payments: [],
+  requiresPhoto: false,
+  submissionNote: null,
+  siteRadiusMeters: 300,
+  arrivalLocation: null,
+  acceptedAt: null,
+  arrivedAt: null,
+  submittedAt: null,
+  failedAt: null,
+  failureReason: null,
+} as const;
+
+function upgradeStoredJob(parsed: Record<string, unknown>): unknown {
+  const withFields: Record<string, unknown> = {
+    ...PHASE_4_DEFAULTS,
+    ...OPERATION_DEFAULTS,
+    ...parsed,
+  };
+  withFields['manager'] ??= parsed['createdBy'];
+  if (Array.isArray(parsed['checklist'])) {
+    withFields['checklist'] = parsed['checklist'].map((item: object) => ({
+      checked: null,
+      responseNote: null,
+      ...item,
+    }));
+  }
+  if (Array.isArray(parsed['history'])) {
+    withFields['history'] = parsed['history'].map((entry: object) => ({
+      reason: null,
+      ...entry,
+    }));
+  }
+  return withFields;
+}
+
+function parseJob(json: string): JobDetail {
+  const parsed: unknown = JSON.parse(json);
+  const value =
+    typeof parsed === 'object' && parsed !== null
+      ? upgradeStoredJob(parsed as Record<string, unknown>)
+      : parsed;
+  if (!isJobDetail(value)) {
+    throw new Error('Stored job does not match the job contract');
+  }
+  return value;
+}
+
+/** sync_state key of the catalog kept for offline order collections. */
+const CATALOG_KEY = 'catalog';
+
+/** What each worker status command is called in "This job can't be … now". */
+const STEP_NAMES: Readonly<Record<string, string>> = {
+  accept: 'accepted',
+  decline: 'handed back',
+  depart: 'started on',
+  arrive: 'marked as arrived',
+  start: 'started',
+  complete: 'completed',
+  submit: 'submitted',
+  fail: 'reported as failed',
+};
+
+/** The stored payload of an entry, typed by its command. */
+function toCommand(type: OutboxType, payload: string | null): OutboxCommand {
+  const value: unknown = payload === null ? null : JSON.parse(payload);
+  switch (type) {
+    case 'job.accept':
+    case 'job.depart':
+    case 'job.arrive':
+    case 'job.start':
+    case 'job.complete':
+      return {
+        type,
+        payload: value === null ? null : (value as StatusPayload),
+      } as OutboxCommand;
+    case 'job.decline':
+    case 'job.fail':
+    case 'job.submit':
+    case 'job.note.add':
+    case 'job.evidence.add':
+    case 'job.message.send':
+      if (value === null) {
+        throw new Error(`Outbox entry ${type} has no payload`);
+      }
+      return { type, payload: value } as OutboxCommand;
+  }
+}
+
+function toEntry(row: SqlRow): OutboxEntry {
+  const code = optionalText(row, 'last_error_code');
+  return {
+    seq: integer(row, 'seq'),
+    mutationId: text(row, 'mutation_id'),
+    ...toCommand(text(row, 'type') as OutboxType, optionalText(row, 'payload')),
+    jobId: text(row, 'job_id'),
+    jobTitle: text(row, 'job_title'),
+    baseVersion: integer(row, 'base_version'),
+    occurredAt: text(row, 'occurred_at'),
+    status: text(row, 'status') as OutboxEntry['status'],
+    attempts: integer(row, 'attempts'),
+    nextAttemptAt: optionalText(row, 'next_attempt_at'),
+    lastAttemptAt: optionalText(row, 'last_attempt_at'),
+    lastError:
+      code === null
+        ? null
+        : { code, message: optionalText(row, 'last_error_message') ?? '' },
+    createdAt: text(row, 'created_at'),
+  };
+}
+
+/** An evidence file's state from its upload entry's status (none left: it is on the server). */
+function uploadState(status: string | null): EvidenceUploadState {
+  switch (status) {
+    case 'pending':
+      return 'pending';
+    case 'in_flight':
+      return 'uploading';
+    case 'failed':
+    case 'conflict':
+      return 'failed';
+    default:
+      return 'uploaded';
+  }
+}
+
+function toLocalJob(row: SqlRow): LocalJob {
+  return {
+    job: parseJob(text(row, 'local_json')),
+    pendingChanges: integer(row, 'pending_changes'),
+    problems: integer(row, 'problems'),
+  };
+}
+
+/**
+ * The worker's jobs and outbox in SQLite: the only code that touches these tables.
+ *
+ * Every write is one transaction that also recomputes the job's local view, so the view, the
+ * server copy and the outbox can never disagree, even if the app is killed mid-write.
+ * Listeners are told after each committed change, and screens re-read.
+ */
+export class LocalJobStore {
+  private readonly db: SqlDatabase;
+  private readonly me: UserSummary;
+  private readonly now: () => Date;
+  private readonly listeners = new Set<() => void>();
+
+  constructor({ db, me, now = () => new Date() }: LocalJobStoreOptions) {
+    this.db = db;
+    this.me = me;
+    this.now = now;
+  }
+
+  /** Called after every committed change. Returns an unsubscribe function. */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private changed(): void {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
+  private async write<Result>(
+    work: (tx: SqlTransaction) => Result,
+  ): Promise<Result> {
+    const result = await this.db.transaction(work);
+    this.changed();
+    return result;
+  }
+
+  // ---- Reads -------------------------------------------------------------------------
+
+  async listJobs(
+    statuses: readonly JobStatus[],
+    order: 'asc' | 'desc',
+  ): Promise<LocalJob[]> {
+    const placeholders = statuses.map(() => '?').join(', ');
+    const direction = order === 'asc' ? 'ASC' : 'DESC';
+    const rows = await this.db.all(
+      `SELECT ${JOB_COLUMNS} FROM jobs WHERE status IN (${placeholders})
+       ORDER BY scheduled_at ${direction}, id ${direction}`,
+      statuses,
+    );
+    return rows.map(toLocalJob);
+  }
+
+  async getJob(id: string): Promise<LocalJob | null> {
+    const [row] = await this.db.all(
+      `SELECT ${JOB_COLUMNS} FROM jobs WHERE id = ?`,
+      [id],
+    );
+    return row === undefined ? null : toLocalJob(row);
+  }
+
+  /** Entries still to send, in the order they must reach the server. */
+  async pendingEntries(): Promise<OutboxEntry[]> {
+    const rows = await this.db.all(
+      "SELECT * FROM outbox WHERE status = 'pending' ORDER BY seq",
+    );
+    return rows.map(toEntry);
+  }
+
+  /** A job's commands still on their way to the server (pending or being sent). */
+  async activeEntries(jobId: string): Promise<OutboxEntry[]> {
+    const rows = await this.db.all(
+      `SELECT * FROM outbox WHERE job_id = ? AND status IN ${ACTIVE} ORDER BY seq`,
+      [jobId],
+    );
+    return rows.map(toEntry);
+  }
+
+  /** Rejected entries the worker has not dismissed yet, oldest first. */
+  async problemEntries(jobId?: string): Promise<OutboxEntry[]> {
+    const rows = await this.db.all(
+      `SELECT * FROM outbox WHERE status IN ${PROBLEM}
+       ${jobId === undefined ? '' : 'AND job_id = ?'} ORDER BY seq`,
+      jobId === undefined ? [] : [jobId],
+    );
+    return rows.map(toEntry);
+  }
+
+  async entry(seq: number): Promise<OutboxEntry | null> {
+    const [row] = await this.db.all('SELECT * FROM outbox WHERE seq = ?', [
+      seq,
+    ]);
+    return row === undefined ? null : toEntry(row);
+  }
+
+  async counts(): Promise<OutboxCounts> {
+    const [row] = await this.db.all(
+      `SELECT
+        coalesce(sum(status IN ${ACTIVE}), 0) AS pending,
+        coalesce(sum(status = 'failed'), 0) AS failed,
+        coalesce(sum(status = 'conflict'), 0) AS conflicts
+       FROM outbox`,
+    );
+    return {
+      pending: row === undefined ? 0 : integer(row, 'pending'),
+      failed: row === undefined ? 0 : integer(row, 'failed'),
+      conflicts: row === undefined ? 0 : integer(row, 'conflicts'),
+    };
+  }
+
+  /** The job's photos stored on this phone, with how far their upload has got. */
+  async evidenceFiles(jobId: string): Promise<LocalEvidenceFile[]> {
+    const rows = await this.db.all(
+      `SELECT f.evidence_id, f.file_uri, o.status
+       FROM evidence_files f LEFT JOIN outbox o ON o.mutation_id = f.mutation_id
+       WHERE f.job_id = ? ORDER BY f.created_at`,
+      [jobId],
+    );
+    return rows.map(row => ({
+      evidenceId: text(row, 'evidence_id'),
+      fileUri: text(row, 'file_uri'),
+      state: uploadState(optionalText(row, 'status')),
+    }));
+  }
+
+  /**
+   * Photo files nothing needs any more: their upload entry is gone (dismissed, or synced and
+   * pruned), or it synced and the job has left the device. The caller deletes each file,
+   * then forgets it (forgetEvidenceFile), so a crash in between only retries the delete.
+   */
+  async evidenceFilesToDelete(): Promise<LocalEvidenceFile[]> {
+    const rows = await this.db.all(
+      `SELECT f.evidence_id, f.file_uri, o.status
+       FROM evidence_files f LEFT JOIN outbox o ON o.mutation_id = f.mutation_id
+       WHERE o.seq IS NULL
+          OR (o.status = 'synced' AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = f.job_id))`,
+    );
+    return rows.map(row => ({
+      evidenceId: text(row, 'evidence_id'),
+      fileUri: text(row, 'file_uri'),
+      state: uploadState(optionalText(row, 'status')),
+    }));
+  }
+
+  async forgetEvidenceFile(evidenceId: string): Promise<void> {
+    await this.write(tx => {
+      tx.run('DELETE FROM evidence_files WHERE evidence_id = ?', [evidenceId]);
+    });
+  }
+
+  /** The active catalog the server sent with the working set (for order collections). */
+  async getCatalog(): Promise<Product[]> {
+    const json = await this.getMeta(CATALOG_KEY);
+    if (json === null) {
+      return [];
+    }
+    const parsed: unknown = JSON.parse(json);
+    return isProductList(parsed) ? parsed : [];
+  }
+
+  async getMeta(key: string): Promise<string | null> {
+    const [row] = await this.db.all(
+      'SELECT value FROM sync_state WHERE key = ?',
+      [key],
+    );
+    return row === undefined ? null : text(row, 'value');
+  }
+
+  // ---- Local commands (work offline) -------------------------------------------------
+
+  /** The worker accepts an assigned operation (field lifecycle). */
+  acceptJob(jobId: string): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.accept', payload: { location: null } },
+      allowed('accept'),
+    );
+  }
+
+  /** The worker hands an operation back, with a reason for the manager. */
+  declineJob(jobId: string, reason: string): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      {
+        type: 'job.decline',
+        payload: { reason: reason.trim(), location: null },
+      },
+      allowed('decline'),
+    );
+  }
+
+  departJob(
+    jobId: string,
+    location: DeviceLocation | null = null,
+  ): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.depart', payload: { location } },
+      allowed('depart'),
+    );
+  }
+
+  arriveJob(
+    jobId: string,
+    location: DeviceLocation | null = null,
+  ): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.arrive', payload: { location } },
+      allowed('arrive'),
+    );
+  }
+
+  /**
+   * The worker starts the job, with their position if the phone had one. Committed locally;
+   * the sync engine sends it later.
+   */
+  startJob(
+    jobId: string,
+    location: DeviceLocation | null = null,
+  ): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.start', payload: { location } },
+      allowed('start'),
+    );
+  }
+
+  completeJob(
+    jobId: string,
+    location: DeviceLocation | null = null,
+  ): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.complete', payload: { location } },
+      allowed('complete'),
+    );
+  }
+
+  /** The worker cannot carry the operation out. */
+  failJob(
+    jobId: string,
+    reason: string,
+    location: DeviceLocation | null = null,
+  ): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.fail', payload: { reason: reason.trim(), location } },
+      allowed('fail'),
+    );
+  }
+
+  /**
+   * The worker's result. Checked here with the same requirements the server applies (photos
+   * waiting to upload count: the outbox sends them before the submission), so a submission
+   * that would be refused is never queued. `productNames` names new order lines offline.
+   */
+  submitJob(
+    jobId: string,
+    request: Omit<SubmitJobRequest, 'location'>,
+    location: DeviceLocation | null = null,
+    productNames: SubmitPayload['productNames'] = {},
+  ): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.submit', payload: { request, location, productNames } },
+      job => {
+        allowed('submit')(job);
+        const problems = submissionProblems(
+          {
+            type: job.type,
+            requiresPhoto: job.requiresPhoto,
+            photoCount: job.evidence.length,
+            checklist: job.checklist,
+            lines: job.lines,
+            expectedAmount: job.expectedAmount,
+          },
+          request,
+        );
+        if (problems.length > 0) {
+          throw new LocalCommandError(
+            'REQUIREMENTS_NOT_MET',
+            problems.map(problem => problem.message).join(' '),
+          );
+        }
+      },
+    );
+  }
+
+  addNote(jobId: string, body: string): Promise<OutboxEntry> {
+    const now = this.now();
+    return this.command(jobId, {
+      type: 'job.note.add',
+      payload: { noteId: uuidv7(now.getTime()), body: body.trim() },
+    });
+  }
+
+  /**
+   * Attaches a photo already copied into app-private storage. The outbox entry (the upload)
+   * and the file's record are written in one transaction, so a photo is either queued with
+   * its file known, or not at all.
+   */
+  addEvidence(jobId: string, evidence: EvidencePayload): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.evidence.add', payload: evidence },
+      undefined,
+      (tx, mutationId, now) => {
+        tx.run(
+          `INSERT INTO evidence_files (evidence_id, mutation_id, job_id, file_uri, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+          [evidence.evidenceId, mutationId, jobId, evidence.fileUri, now],
+        );
+      },
+    );
+  }
+
+  /** A message to the job's managers. Shown at once, delivered by the sync engine. */
+  sendMessage(jobId: string, body: string): Promise<OutboxEntry> {
+    const now = this.now();
+    return this.command(jobId, {
+      type: 'job.message.send',
+      payload: { messageId: uuidv7(now.getTime()), body: body.trim() },
+    });
+  }
+
+  /**
+   * The atomic local write path: validate against the local view, insert the outbox entry and
+   * recompute the view, all in one transaction. Either the worker's action exists both in the
+   * UI and in the outbox, or not at all.
+   */
+  private async command(
+    jobId: string,
+    command: OutboxCommand,
+    validate: (job: JobDetail) => void = () => undefined,
+    alsoWrite: (
+      tx: SqlTransaction,
+      mutationId: string,
+      now: string,
+    ) => void = () => undefined,
+  ): Promise<OutboxEntry> {
+    const now = this.now().toISOString();
+    const mutationId = uuidv7(Date.parse(now));
+    const seq = await this.write(tx => {
+      const [row] = tx.all(
+        'SELECT local_json, server_version FROM jobs WHERE id = ?',
+        [jobId],
+      );
+      if (row === undefined) {
+        throw new LocalCommandError(
+          'JOB_NOT_FOUND',
+          'This job is no longer on this device.',
+        );
+      }
+      const job = parseJob(text(row, 'local_json'));
+      validate(job);
+      tx.run(
+        `INSERT INTO outbox (mutation_id, type, job_id, job_title, payload, base_version,
+           occurred_at, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        [
+          mutationId,
+          command.type,
+          jobId,
+          job.title,
+          command.payload === null ? null : JSON.stringify(command.payload),
+          integer(row, 'server_version'),
+          now,
+          now,
+          now,
+        ],
+      );
+      alsoWrite(tx, mutationId, now);
+      this.reproject(tx, jobId);
+      const [inserted] = tx.all(
+        'SELECT seq FROM outbox WHERE mutation_id = ?',
+        [mutationId],
+      );
+      return inserted === undefined ? 0 : integer(inserted, 'seq');
+    });
+    const entry = await this.entry(seq);
+    if (entry === null) {
+      throw new Error('Outbox entry vanished after insert');
+    }
+    return entry;
+  }
+
+  /**
+   * The worker asks to try a failed entry again (for example after a long server outage
+   * used up its retries). Conflicts cannot be retried: the server state has moved on.
+   */
+  async retry(seq: number): Promise<void> {
+    const now = this.now().toISOString();
+    await this.write(tx => {
+      tx.run(
+        `UPDATE outbox SET status = 'pending', attempts = 0, next_attempt_at = NULL,
+           updated_at = ? WHERE seq = ? AND status = 'failed'`,
+        [now, seq],
+      );
+      const [row] = tx.all('SELECT job_id FROM outbox WHERE seq = ?', [seq]);
+      if (row !== undefined) {
+        this.reproject(tx, text(row, 'job_id'));
+      }
+    });
+  }
+
+  /** The worker acknowledges a rejected entry; it leaves the attention list. */
+  async dismiss(seq: number): Promise<void> {
+    await this.write(tx => {
+      tx.run(`DELETE FROM outbox WHERE seq = ? AND status IN ${PROBLEM}`, [
+        seq,
+      ]);
+    });
+  }
+
+  // ---- Used by the sync engine -------------------------------------------------------
+
+  /**
+   * Start-up recovery: an entry left `in_flight` belongs to an attempt the app did not see
+   * finish. It may or may not have reached the server; sending it again is safe because the
+   * server deduplicates by mutation ID.
+   */
+  async recoverInFlight(): Promise<void> {
+    await this.write(tx => {
+      tx.run("UPDATE outbox SET status = 'pending' WHERE status = 'in_flight'");
+    });
+  }
+
+  async markInFlight(seq: number): Promise<void> {
+    const now = this.now().toISOString();
+    await this.write(tx => {
+      tx.run(
+        "UPDATE outbox SET status = 'in_flight', last_attempt_at = ?, updated_at = ? WHERE seq = ?",
+        [now, now, seq],
+      );
+    });
+  }
+
+  /** The server applied the entry: store its job as the new server copy, in one transaction. */
+  async markSynced(seq: number, serverJob: JobDetail): Promise<void> {
+    const now = this.now().toISOString();
+    await this.write(tx => {
+      tx.run(
+        `UPDATE outbox SET status = 'synced', next_attempt_at = NULL, last_error_code = NULL,
+           last_error_message = NULL, updated_at = ? WHERE seq = ?`,
+        [now, seq],
+      );
+      this.storeServerJob(tx, serverJob, now);
+    });
+  }
+
+  /** Back to pending, to be retried (`attempts` counts only failures the server answered). */
+  async markRetry(
+    seq: number,
+    retry: {
+      readonly attempts: number;
+      readonly nextAttemptAt: Date | null;
+      readonly error: OutboxError;
+    },
+  ): Promise<void> {
+    await this.markOutcome(seq, 'pending', retry.error, {
+      attempts: retry.attempts,
+      nextAttemptAt: retry.nextAttemptAt?.toISOString() ?? null,
+    });
+  }
+
+  /** Rejected for good: the entry stops affecting the local view and needs attention. */
+  async markRejected(
+    seq: number,
+    status: 'failed' | 'conflict',
+    error: OutboxError,
+    attempts?: number,
+  ): Promise<void> {
+    await this.markOutcome(seq, status, error, {
+      nextAttemptAt: null,
+      ...(attempts !== undefined && { attempts }),
+    });
+  }
+
+  private async markOutcome(
+    seq: number,
+    status: 'pending' | 'failed' | 'conflict',
+    error: OutboxError,
+    fields: { attempts?: number; nextAttemptAt: string | null },
+  ): Promise<void> {
+    const now = this.now().toISOString();
+    await this.write(tx => {
+      tx.run(
+        `UPDATE outbox SET status = ?, attempts = coalesce(?, attempts), next_attempt_at = ?,
+           last_error_code = ?, last_error_message = ?, updated_at = ? WHERE seq = ?`,
+        [
+          status,
+          fields.attempts ?? null,
+          fields.nextAttemptAt,
+          error.code,
+          error.message,
+          now,
+          seq,
+        ],
+      );
+      const [row] = tx.all('SELECT job_id FROM outbox WHERE seq = ?', [seq]);
+      if (row !== undefined) {
+        this.reproject(tx, text(row, 'job_id'));
+      }
+    });
+  }
+
+  /**
+   * Replaces the local working set with the server's snapshot, in one transaction:
+   * - every job in it becomes the new server copy (pending commands re-applied on top);
+   * - a local job missing from it is no longer the worker's (reassigned, or closed long
+   *   ago) and is removed, unless commands for it are still pending: those are resolved
+   *   first, and the next snapshot removes it.
+   */
+  async applyWorkingSet(set: JobWorkingSet): Promise<void> {
+    const now = this.now().toISOString();
+    await this.write(tx => {
+      const incoming = new Set<string>();
+      for (const job of set.jobs) {
+        incoming.add(job.id);
+        this.storeServerJob(tx, job, now);
+      }
+      const local = tx.all('SELECT id FROM jobs').map(row => text(row, 'id'));
+      for (const id of local) {
+        if (incoming.has(id)) {
+          continue;
+        }
+        const [active] = tx.all(
+          `SELECT count(*) AS n FROM outbox WHERE job_id = ? AND status IN ${ACTIVE}`,
+          [id],
+        );
+        if (active === undefined || integer(active, 'n') === 0) {
+          tx.run('DELETE FROM jobs WHERE id = ?', [id]);
+        }
+      }
+      this.setMeta(tx, 'last_pull_at', set.generatedAt);
+      this.setMeta(tx, CATALOG_KEY, JSON.stringify(set.products));
+    });
+  }
+
+  /** Keeps synced entries for a while for diagnostics, then removes them. */
+  async pruneSynced(olderThan: Date): Promise<void> {
+    await this.write(tx => {
+      tx.run("DELETE FROM outbox WHERE status = 'synced' AND updated_at < ?", [
+        olderThan.toISOString(),
+      ]);
+    });
+  }
+
+  async setSyncMeta(key: string, value: string): Promise<void> {
+    await this.write(tx => this.setMeta(tx, key, value));
+  }
+
+  private setMeta(tx: SqlTransaction, key: string, value: string): void {
+    tx.run(
+      `INSERT INTO sync_state (key, value) VALUES (?, ?)
+       ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+      [key, value],
+    );
+  }
+
+  /**
+   * Stores a job from the server as the new server copy, unless the stored copy is newer
+   * (versions only grow; a field note does not change the version, so an equal version
+   * still replaces the copy).
+   */
+  private storeServerJob(
+    tx: SqlTransaction,
+    job: JobDetail,
+    receivedAt: string,
+  ): void {
+    const [existing] = tx.all('SELECT server_version FROM jobs WHERE id = ?', [
+      job.id,
+    ]);
+    if (
+      existing !== undefined &&
+      integer(existing, 'server_version') > job.version
+    ) {
+      return;
+    }
+    const json = JSON.stringify(job);
+    tx.run(
+      `INSERT INTO jobs (id, server_json, local_json, status, scheduled_at, server_version, received_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET server_json = excluded.server_json,
+         server_version = excluded.server_version, received_at = excluded.received_at`,
+      [
+        job.id,
+        json,
+        json,
+        job.status,
+        job.scheduledAt,
+        job.version,
+        receivedAt,
+      ],
+    );
+    this.reproject(tx, job.id);
+  }
+
+  /** Recomputes a job's local view from its server copy and its pending commands. */
+  private reproject(tx: SqlTransaction, jobId: string): void {
+    const [row] = tx.all('SELECT server_json FROM jobs WHERE id = ?', [jobId]);
+    if (row === undefined) {
+      return;
+    }
+    const pending = tx
+      .all(
+        `SELECT * FROM outbox WHERE job_id = ? AND status IN ${ACTIVE} ORDER BY seq`,
+        [jobId],
+      )
+      .map(toEntry);
+    const local = projectJob(
+      parseJob(text(row, 'server_json')),
+      pending,
+      this.me,
+    );
+    tx.run(
+      'UPDATE jobs SET local_json = ?, status = ?, scheduled_at = ? WHERE id = ?',
+      [JSON.stringify(local), local.status, local.scheduledAt, jobId],
+    );
+  }
+}
+
+/** Refuses a status command the job's lifecycle does not allow now. */
+function allowed(transition: JobTransition): (job: JobDetail) => void {
+  return job => {
+    if (nextStatus(job.type, job.status, transition) === undefined) {
+      throw new LocalCommandError(
+        'INVALID_STATUS_TRANSITION',
+        `This job can't be ${STEP_NAMES[transition] ?? transition} now.`,
+      );
+    }
+  };
+}

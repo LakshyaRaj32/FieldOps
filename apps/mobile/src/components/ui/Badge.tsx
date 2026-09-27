@@ -3,10 +3,12 @@ import { StyleSheet, View } from 'react-native';
 
 import { useTheme, type AppTheme } from '../../theme';
 import { AppText } from './AppText';
+import { Icon, type IconName } from './Icon';
 
 export type BadgeTone =
   | 'neutral'
   | 'primary'
+  | 'info'
   | 'success'
   | 'warning'
   | 'danger';
@@ -14,9 +16,11 @@ export type BadgeTone =
 export interface BadgeProps {
   readonly label: string;
   readonly tone?: BadgeTone;
+  /** A small leading icon, so the meaning does not rest on color alone. */
+  readonly icon?: IconName;
 }
 
-function badgeColors(
+export function badgeColors(
   theme: AppTheme,
   tone: BadgeTone,
 ): { background: string; text: string } {
@@ -26,6 +30,8 @@ function badgeColors(
       return { background: colors.surfaceMuted, text: colors.textMuted };
     case 'primary':
       return { background: colors.primaryMuted, text: colors.primary };
+    case 'info':
+      return { background: colors.infoMuted, text: colors.info };
     case 'success':
       return { background: colors.successMuted, text: colors.success };
     case 'warning':
@@ -35,10 +41,11 @@ function badgeColors(
   }
 }
 
-/** A compact status label (role, environment, connectivity). */
+/** A compact status label (job status, role, sync state). */
 export function Badge({
   label,
   tone = 'neutral',
+  icon,
 }: BadgeProps): React.JSX.Element {
   const theme = useTheme();
   const colors = badgeColors(theme, tone);
@@ -50,10 +57,14 @@ export function Badge({
           backgroundColor: colors.background,
           borderRadius: theme.radii.pill,
           paddingHorizontal: theme.spacing.sm,
+          gap: theme.spacing.xs,
         },
       ]}
     >
-      <AppText variant="label" style={{ color: colors.text }}>
+      {icon !== undefined ? (
+        <Icon name={icon} size="sm" color={colors.text} />
+      ) : null}
+      <AppText variant="captionStrong" style={{ color: colors.text }}>
         {label}
       </AppText>
     </View>
@@ -63,6 +74,8 @@ export function Badge({
 const styles = StyleSheet.create({
   badge: {
     alignSelf: 'flex-start',
-    paddingVertical: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 2,
   },
 });

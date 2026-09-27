@@ -1,9 +1,103 @@
 # Offline-First Architecture
 
-> Status: **design (Version 0).** Implemented in V5 (local persistence) and V6 (sync engine).
-> The sync protocol itself is covered in [synchronization.md](synchronization.md).
+> Status: **implemented in Phase 3 (Offline-First)** for the worker's job workflow. The first
+> section is what is built; the rest is the original design, still the target for later
+> phases (photos, location, messages). The sync protocol is in
+> [synchronization.md](synchronization.md).
 
-## 1. What "offline-first" means in FieldOps
+## As built in Phase 3
+
+### What works offline
+
+| Capability | Offline | How |
+| --- | :---: | --- |
+| Worker: see assigned jobs (list, details, checklist, history, notes) | ✅ | Read from SQLite; downloaded while online |
+| Worker: start a job, complete it, add field notes | ✅ | Local command + outbox entry in one SQLite transaction |
+| Worker: open the app with no network | ✅ | Session restored from secure storage (V2), database opened, jobs shown |
+| Worker: pending changes survive a force close or reboot | ✅ | Outbox in SQLite; in-flight entries recovered on start |
+| Worker: see what is unsynced and what was rejected | ✅ | Global banner, per-job badges, Profile › Offline sync |
+| Receive new assignments | ❌ | Arrive with the next sync (foreground, reconnect, pull to refresh) |
+| Managers and admins (create, assign, edit, cancel, monitor) | ❌ | Online by design; manager screens use RTK Query |
+| Worker: record where a job was started/completed (Phase 4) | ✅ | The fix is part of the start/complete outbox entry |
+| Worker: take or choose photos (Phase 4) | ✅ | File copied to app-private storage; upload is an outbox entry |
+| Worker: write job messages (Phase 4) | ✅ | Outbox entry `job.message.send`; shown at once as "waiting to send" |
+| Receive messages, assignments while open (Phase 4) | ❌ offline / ✅ online | Realtime hint → sync; push when in the background |
+| Signatures, documents | ❌ | Not built yet |
+
+### Write path (as implemented)
+
+```text
+ "Start job"  (WorkerJobDetail)
+   │
+   ▼
+ LocalJobStore.startJob(jobId)
+   │  BEGIN
+   │    read the job's local view; shared state machine: may it start? (else refuse, write nothing)
+   │    INSERT outbox (mutation_id = UUIDv7, type job.start, status pending, base_version)
+   │    recompute local_json = server_json + pending commands; UPDATE jobs
+   │  COMMIT            ← both or neither (tested with an injected mid-transaction crash)
+   │  notify subscribers → screens re-read SQLite
+   ▼
+ engine.sync()  (in the background; the UI never waits for it)
+```
+
+The worker's action is complete the moment the transaction commits. There are no spinners
+for local writes, and nothing is lost if the app is killed straight after.
+
+### Read path (as implemented)
+
+- Worker screens (job list, details, dashboard) read **only** SQLite through
+  `useLocalJobs` / `useLocalJob`, which re-run after every committed change, whether it came
+  from the worker or from a sync.
+- The network never bypasses the local database: sync results are written to SQLite first,
+  and the UI updates from there.
+- The two copies per job make convergence explicit: `server_json` is replaced by what the
+  server sends (the server is the source of truth), `local_json` is always recomputed as the
+  server copy plus the still-pending commands. SQLite never becomes an independent authority.
+
+### Phase 4 additions
+
+- **Schema v2** rebuilds the outbox with the new command types (rows copied unchanged; SQLite
+  cannot alter a CHECK constraint) and adds `evidence_files`. Jobs stored by v1 are completed
+  with the Phase 4 fields when read, so an upgraded phone with pending work keeps working
+  (tested in `localSchema.test.ts`).
+- **Binary data stays out of SQLite.** A photo's bytes are a file in `files/evidence`; the
+  outbox payload holds its URI. Files are deleted once their upload is settled and no longer
+  shown ([evidence.md](evidence.md#on-the-device)).
+- **Location** is captured only at explicit actions and stored inside the command it belongs
+  to; there is no location table on the device ([location.md](location.md)).
+
+### Local database lifecycle
+
+- **One file per user** (`fieldops-<userId>.sqlite`), opened at sign-in or session restore
+  for workers. Another user signing in on the same phone never sees it.
+- **Migrations:** schema version in `PRAGMA user_version`; each migration runs in one
+  transaction with its version bump, before anything reads; a failure leaves the previous
+  version (and the outbox) intact; a database newer than the app is refused. Adding a change
+  means appending the next migration in `features/jobs/data/localSchema.ts`, never editing a
+  released one. Current version: **1**.
+- **Sign-out:** an explicit sign-out with nothing unsynced deletes the file. With unsynced
+  changes the worker is warned, and the file is kept: the changes sync after the same worker
+  signs in again. A session ended by the server (revoked, expired) always keeps the file.
+- **Pruning:** jobs closed more than 7 days ago leave the working set (and the device) once
+  nothing is pending for them; synced outbox entries are deleted after 7 days.
+
+### Security of local data
+
+- Tokens stay in the Android Keystore-backed credential store (V2). SQLite holds only job
+  data and the outbox; nothing logs tokens, passwords or note contents.
+- The database sits in the app's private storage. It is **not encrypted** yet: a rooted or
+  forensically imaged phone could read the cached jobs (customer names, addresses, notes).
+  Encryption at rest (SQLCipher-capable build, key in the Keystore) is part of Phase 5
+  security hardening, as is a maximum offline session duration.
+- Locally generated IDs use Math.random (uniqueness, not secrecy); the server authorizes
+  every command regardless of IDs.
+
+---
+
+## Original design (V0)
+
+### 1. What "offline-first" means in FieldOps
 
 Offline is **the normal operating mode, not an error state.** Workers go into basements, rural
 areas, elevators and hospitals. The app behaves as follows:
@@ -20,7 +114,7 @@ areas, elevators and hospitals. The app behaves as follows:
 "Online-first with a cache" is **not** the model. A cache is optional, whereas the local
 database is authoritative for the device.
 
-## 2. Capability matrix
+### 2. Capability matrix
 
 | Capability | Offline | Notes |
 | --- | :---: | --- |
@@ -35,7 +129,7 @@ database is authoritative for the device.
 | Log in for the first time on a device | ❌ | Requires the server |
 | Continue working with an expired access token | ✅ | See section 8 |
 
-## 3. Data classes on the device
+### 3. Data classes on the device
 
 | Class | Examples | Storage | Direction | Retention |
 | --- | --- | --- | --- | --- |
@@ -48,7 +142,7 @@ database is authoritative for the device.
 | Preferences | Filters, flags, device ID | MMKV | Local only | Persistent |
 | Credentials | Refresh token, access token | Keystore-backed secure storage | Local only | Until logout or revocation |
 
-## 4. The write path
+### 4. The write path
 
 Every user action that changes domain data follows the same path:
 
@@ -79,7 +173,7 @@ Key properties:
 - **Commands, not diffs.** The outbox records *intent* (`job.complete` with `occurredAt`), not
   "row X now equals Y". This is what makes server-side conflict handling tractable.
 
-## 5. The read path
+### 5. The read path
 
 - Screens subscribe to **local queries**. When the data layer commits a change, whether from
   the user or from a sync pull, it notifies observers of the affected tables, and subscribed
@@ -88,7 +182,7 @@ Key properties:
 - Each record the user can see carries a **sync state** (`synced`, `pending`, `failed`) so the
   UI can show a subtle "pending" indicator and a clear "needs attention" state.
 
-## 6. State layering on the device
+### 6. State layering on the device
 
 | Layer | Holds | Technology | Survives restart? |
 | --- | --- | --- | :---: |
@@ -106,7 +200,7 @@ Key properties:
 - Redux may **mirror** summaries of durable state for display (for example "3 changes pending"),
   but SQLite remains the truth, and the mirror is rebuilt from SQLite on startup.
 
-## 7. Connectivity
+### 7. Connectivity
 
 - **NetInfo is a hint, not the truth.** "Connected to Wi-Fi" often means a captive portal,
   or a link with 100% packet loss. The sync engine **attempts** requests and classifies the
@@ -117,7 +211,7 @@ Key properties:
   batches) before large ones (photos), and may postpone large uploads until Wi-Fi if the user
   allows it (V9).
 
-## 8. Authentication while offline
+### 8. Authentication while offline
 
 - The access token will expire while the worker is offline. This **must not** block local
   work. Local actions don't need a valid access token, only a known, previously authenticated
@@ -132,7 +226,7 @@ Key properties:
 - An organization can configure a maximum offline session duration (V18) to limit the risk
   from lost devices.
 
-## 9. Local storage lifecycle
+### 9. Local storage lifecycle
 
 - **Migrations.** The local SQLite schema is versioned and migrated forward on app start,
   inside a transaction, before the UI reads anything. Migrations are tested against snapshots
@@ -144,7 +238,7 @@ Key properties:
   pruned on a schedule to keep storage bounded. Pending data is never pruned.
 - **Storage pressure.** The app monitors free space and warns before photo capture fails.
 
-## 10. Security of local data
+### 10. Security of local data
 
 - The app-private storage sandbox is the baseline. Local database encryption (SQLCipher-capable
   build with a key held in the Android Keystore) is evaluated in V5 and enforced by V18.
@@ -152,7 +246,7 @@ Key properties:
   explicitly confirms discarding it, with a clear warning.
 - Tokens never go into SQLite, MMKV plaintext or logs.
 
-## 11. UX principles
+### 11. UX principles
 
 - Every user action gets immediate local feedback. There are no spinners for local writes.
 - Pending state is visible but calm (for example a small clock icon). "Needs attention" is
@@ -163,7 +257,7 @@ Key properties:
 - Online-only screens clearly show when their data is stale or unavailable instead of
   failing silently.
 
-## 12. Testing offline behavior
+### 12. Testing offline behavior
 
 - Unit tests for local command handlers (domain change plus outbox entry in one transaction).
 - Fault-injection tests for the sync engine: requests that time out, fail, succeed without
