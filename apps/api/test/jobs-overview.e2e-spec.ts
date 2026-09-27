@@ -2,9 +2,12 @@ import type { AuthResult, JobDetail, JobOverview, Role } from '@fieldops/types';
 
 import {
   createTestApp,
+  joinOrganization,
   resetDatabase,
   type TestApp,
 } from './helpers/test-app.js';
+
+type JoinRole = Parameters<typeof joinOrganization>[2];
 
 const PASSWORD = 'correct horse battery staple';
 const HOUR = 3_600_000;
@@ -41,16 +44,17 @@ describe('GET /api/v1/jobs/overview (e2e)', () => {
       });
     expect(response.status).toBe(201);
     const { user, tokens } = (response.body as { data: AuthResult }).data;
-    if (role !== 'WORKER') {
-      await t.prisma.user.update({ where: { id: user.id }, data: { role } });
-    }
+    // Phase 2-4 semantics: one manager runs the whole organization.
+    await joinOrganization(t.prisma, user.id, role as JoinRole, undefined, {
+      organizationWideAccess: role === 'MANAGER',
+    });
     return { id: user.id, token: tokens.accessToken };
   }
 
   beforeEach(async () => {
     await resetDatabase(t.prisma);
     manager = await signUp('Manager', 'MANAGER');
-    admin = await signUp('Admin', 'ADMIN');
+    admin = await signUp('Admin', 'ORGANIZATION_ADMIN');
     asha = await signUp('Asha', 'WORKER');
     ravi = await signUp('Ravi', 'WORKER');
   });
@@ -113,8 +117,22 @@ describe('GET /api/v1/jobs/overview (e2e)', () => {
       },
       overdue: 0,
       dueNext24Hours: 0,
+      awaitingVerification: 0,
       completedLast7Days: 0,
       cancelledLast7Days: 0,
+      failedLast7Days: 0,
+      scope: 'organization',
+      // Nothing invented: two real workers, no money, no shops yet.
+      workers: { total: 2, busy: 0, available: 2, online: 0 },
+      collections: {
+        currency: 'INR',
+        outstanding: 0,
+        dueToday: 0,
+        overdue: 0,
+        collectedToday: 0,
+        pendingVerification: 0,
+      },
+      shops: { total: 0, visitedToday: 0, pendingVisits: 0 },
       workload: [],
       recentActivity: [],
     });
@@ -150,9 +168,14 @@ describe('GET /api/v1/jobs/overview (e2e)', () => {
     expect(data.statusCounts).toEqual({
       PENDING: 1,
       ASSIGNED: 2,
+      ACCEPTED: 0,
+      EN_ROUTE: 0,
+      ARRIVED: 0,
       IN_PROGRESS: 1,
+      SUBMITTED: 0,
       COMPLETED: 1,
       CANCELLED: 1,
+      FAILED: 0,
     });
     // Only open jobs count as overdue: the completed job was also scheduled in the past.
     expect(data.overdue).toBe(1);

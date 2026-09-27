@@ -10,12 +10,18 @@ import {
   type BadgeTone,
   type IconName,
 } from '../../../components/ui';
+import { useAppSelector } from '../../../store/hooks';
+import { selectSessionUser } from '../../../store/slices/sessionSlice';
 import { useTheme } from '../../../theme';
+import { currencyOf } from '../../auth/roles';
 import {
   formatSchedule,
   fullName,
+  money,
   priorityBadge,
   STATUS_LABELS,
+  TYPE_ICONS,
+  TYPE_LABELS,
 } from '../presentation';
 import { JobPriorityBadge, JobStatusBadge } from './JobBadges';
 
@@ -67,9 +73,14 @@ export function JobCard({
   dense = false,
 }: JobCardProps): React.JSX.Element {
   const theme = useTheme();
+  const currency = currencyOf(useAppSelector(selectSessionUser));
   const schedule = formatSchedule(job.scheduledAt);
   const assignee =
     job.assignedWorker === null ? 'Unassigned' : fullName(job.assignedWorker);
+  const kind =
+    job.expectedAmount === null
+      ? TYPE_LABELS[job.type]
+      : `${TYPE_LABELS[job.type]} · ${money(job.expectedAmount, currency)}`;
 
   const content = (
     <>
@@ -80,9 +91,12 @@ export function JobCard({
         <JobStatusBadge status={job.status} />
       </View>
       <View style={{ gap: theme.spacing.xxs + 1 }}>
+        {job.type !== 'GENERAL' ? (
+          <MetaLine icon={TYPE_ICONS[job.type]} text={kind} strong />
+        ) : null}
         <MetaLine icon="time-outline" text={schedule} strong />
         <MetaLine
-          icon="business-outline"
+          icon={job.shop === null ? 'business-outline' : 'storefront-outline'}
           text={`${job.customerName} · ${job.address}`}
         />
         {showAssignee ? (
@@ -111,7 +125,7 @@ export function JobCard({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${job.title}, ${job.customerName}, ${
+      accessibilityLabel={`${job.title}, ${kind}, ${job.customerName}, ${
         STATUS_LABELS[job.status]
       }, ${schedule}${showAssignee ? `, ${assignee}` : ''}`}
       onPress={() => onPress(job)}

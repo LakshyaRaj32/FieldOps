@@ -21,8 +21,17 @@ import {
   type JobCommand,
 } from '../presentation';
 import { JobPriorityBadge, JobStatusBadge } from './JobBadges';
+import { ChecklistAnswerRow } from './OperationSections';
 
 const COMMAND_ICONS: Readonly<Partial<Record<JobAction, IconName>>> = {
+  [JobAction.ACCEPT]: 'thumbs-up-outline',
+  [JobAction.DECLINE]: 'return-down-back-outline',
+  [JobAction.DEPART]: 'navigate-outline',
+  [JobAction.ARRIVE]: 'location-outline',
+  [JobAction.FAIL]: 'alert-circle-outline',
+  [JobAction.VERIFY]: 'shield-checkmark-outline',
+  [JobAction.REJECT]: 'arrow-undo-outline',
+  [JobAction.RESCHEDULE]: 'calendar-outline',
   [JobAction.START]: 'play-circle-outline',
   [JobAction.COMPLETE]: 'checkmark-circle-outline',
   [JobAction.ASSIGN]: 'person-add-outline',
@@ -111,8 +120,10 @@ export function JobInformation({
   return (
     <Card>
       <SectionTitle title="Details" icon="information-circle-outline" />
-      <InfoRow label="Scheduled" value={formatSchedule(job.scheduledAt)} />
-      <InfoRow label="Customer" value={job.customerName} />
+      <InfoRow label="Due" value={formatSchedule(job.scheduledAt)} />
+      {job.shop === null ? (
+        <InfoRow label="Customer" value={job.customerName} />
+      ) : null}
       {/* Address and coordinates: JobSiteCard (FieldOperationSections.tsx). */}
       <InfoRow label="Priority" value={PRIORITY_LABELS[job.priority]} />
       {showAssignee ? (
@@ -146,14 +157,24 @@ export function JobChecklist({
   if (job.checklist.length === 0) {
     return null;
   }
+  const answered = job.checklist.some(item => item.checked !== null);
   return (
     <Card>
       <SectionTitle title="Checklist" icon="checkbox-outline" />
-      {job.checklist.map(item => (
-        <AppText key={item.id}>
-          {item.position + 1}. {item.label}
-        </AppText>
-      ))}
+      {job.checklist.map(item =>
+        answered ? (
+          <ChecklistAnswerRow
+            key={item.id}
+            label={item.label}
+            checked={item.checked}
+            note={item.responseNote}
+          />
+        ) : (
+          <AppText key={item.id}>
+            {item.position + 1}. {item.label}
+          </AppText>
+        ),
+      )}
     </Card>
   );
 }

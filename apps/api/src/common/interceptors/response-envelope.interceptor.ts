@@ -29,7 +29,9 @@ export class ResponseEnvelopeInterceptor<T> implements NestInterceptor<
         if (data instanceof StreamableFile) {
           return data;
         }
-        return response.statusCode === 204 ? undefined : { success: true, data };
+        return response.statusCode === 204
+          ? undefined
+          : { success: true, data };
       }),
     );
   }

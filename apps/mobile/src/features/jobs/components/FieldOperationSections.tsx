@@ -23,6 +23,8 @@ import { openInMaps } from '../../../services/location/locationService';
 import { useTheme } from '../../../theme';
 import {
   describeActionLocation,
+  formatDistance,
+  isOutsideSite,
   formatSchedule,
   fullName,
 } from '../presentation';
@@ -78,28 +80,49 @@ export function JobVisitLocations({
 }: {
   readonly job: JobDetail;
 }): React.JSX.Element | null {
-  const { startLocation, completeLocation } = job;
-  if (startLocation === null && completeLocation === null) {
+  const { arrivalLocation, startLocation, completeLocation } = job;
+  if (
+    arrivalLocation === null &&
+    startLocation === null &&
+    completeLocation === null
+  ) {
     return null;
   }
+  const rows = [
+    ['Arrived', arrivalLocation],
+    ['Started', startLocation],
+    [job.type === 'GENERAL' ? 'Completed' : 'Submitted', completeLocation],
+  ] as const;
+  const outside = rows.some(
+    ([, location]) =>
+      location !== null && isOutsideSite(location, job.siteRadiusMeters),
+  );
   return (
     <Card>
       <SectionTitle title="Visit" icon="navigate-outline" />
-      {startLocation !== null ? (
-        <InfoRow
-          label={`Started · ${formatSchedule(startLocation.capturedAt)}`}
-          value={describeActionLocation(startLocation)}
-        />
-      ) : null}
-      {completeLocation !== null ? (
-        <InfoRow
-          label={`Completed · ${formatSchedule(completeLocation.capturedAt)}`}
-          value={describeActionLocation(completeLocation)}
+      {rows.map(([label, location]) =>
+        location === null ? null : (
+          <InfoRow
+            key={label}
+            label={`${label} · ${formatSchedule(location.capturedAt)}`}
+            value={`${describeActionLocation(location)}${
+              isOutsideSite(location, job.siteRadiusMeters)
+                ? ` · beyond the ${formatDistance(job.siteRadiusMeters)} radius`
+                : ''
+            }`}
+          />
+        ),
+      )}
+      {outside ? (
+        <Badge
+          label="Reported away from the site"
+          tone="warning"
+          icon="warning-outline"
         />
       ) : null}
       <AppText variant="caption" tone="muted">
         Positions come from the worker's phone and can be off by the accuracy
-        shown.
+        shown. They are never used to block the work.
       </AppText>
     </Card>
   );

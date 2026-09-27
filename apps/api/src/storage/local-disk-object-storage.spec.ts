@@ -45,7 +45,12 @@ describe('LocalDiskObjectStorage', () => {
   });
 
   it('refuses keys that could leave the storage root', async () => {
-    for (const key of ['../x.jpg', 'evidence/../../x', '/etc/passwd', 'A.jpg']) {
+    for (const key of [
+      '../x.jpg',
+      'evidence/../../x',
+      '/etc/passwd',
+      'A.jpg',
+    ]) {
       await expect(storage.get(key)).rejects.toThrow('Invalid storage key');
     }
   });

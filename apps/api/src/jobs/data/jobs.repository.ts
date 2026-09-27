@@ -1,36 +1,55 @@
 import { Injectable } from '@nestjs/common';
 
+import { userSummarySelect as userSummary } from '../../common/dto/user-summary.dto.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import {
   Prisma,
   type ProcessedMutation,
 } from '../../generated/prisma/client.js';
+import { paymentInclude } from '../../shops/dto/order.dto.js';
 import type { EventLocation } from '../domain/job-location.js';
 import {
   ACTIVITY_LIMIT,
+  BUSY_STATUSES,
   DUE_SOON_MS,
   OPEN_STATUSES,
   RECENT_CLOSED_MS,
+  WAITING_STATUSES,
   type OverviewCounts,
 } from '../domain/job-overview.js';
-import type { JobEventType, JobStatus } from '../job-enums.js';
+import type { JobEventType, JobStatus, JobType } from '../job-enums.js';
 import type { JobCursor } from './job-cursor.js';
 
 /** Messages included in a job's details and in the working set. */
 export const MESSAGES_IN_DETAIL = 100;
 
-const userSummary = {
-  select: { id: true, firstName: true, lastName: true },
-} as const satisfies Prisma.UserDefaultArgs;
+const shopSummary = {
+  select: {
+    id: true,
+    name: true,
+    ownerName: true,
+    phone: true,
+    address: true,
+  },
+} as const satisfies Prisma.ShopDefaultArgs;
 
 const summaryInclude = {
   assignedWorker: userSummary,
+  manager: userSummary,
+  shop: shopSummary,
 } as const satisfies Prisma.JobInclude;
 
 const detailInclude = {
-  assignedWorker: userSummary,
+  ...summaryInclude,
   createdBy: userSummary,
+  organization: { select: { currency: true, arrivalRadiusMeters: true } },
+  order: { select: { id: true, orderNumber: true } },
   checklistItems: { orderBy: { position: 'asc' } },
+  lines: { orderBy: { position: 'asc' } },
+  payments: {
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    include: paymentInclude,
+  },
   events: {
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     include: { actor: userSummary, assignee: userSummary },
@@ -61,12 +80,13 @@ export type JobActivityRecord = Prisma.JobEventGetPayload<{
   include: typeof activityInclude;
 }>;
 
-/** Everything the manager dashboard shows, read in one call (see JobsService.overview). */
+/** Everything the dashboard's operation figures need, read in one call. */
 export interface OverviewRecord extends OverviewCounts {
   readonly overdue: number;
   readonly dueNext24Hours: number;
   readonly completedLast7Days: number;
   readonly cancelledLast7Days: number;
+  readonly failedLast7Days: number;
   readonly recentActivity: JobActivityRecord[];
 }
 
@@ -77,16 +97,27 @@ export type JobDetailRecord = Prisma.JobGetPayload<{
   include: typeof detailInclude;
 }>;
 
-export interface JobListFilter {
+/**
+ * Which operations a query covers. `organizationId` is always set (tenant isolation);
+ * `managerId` narrows to a scoped manager's operations.
+ */
+export interface JobScopeFilter {
+  readonly organizationId: string;
+  readonly managerId?: string;
+}
+
+export interface JobListFilter extends JobScopeFilter {
   readonly statuses?: readonly JobStatus[];
+  readonly types?: readonly JobType[];
   readonly assignedWorkerId?: string;
+  readonly shopId?: string;
   readonly order: 'asc' | 'desc';
   readonly cursor?: JobCursor;
   /** Page size; one extra row is read to know whether another page exists. */
   readonly limit: number;
 }
 
-/** Where the worker was, as recorded on a STARTED or COMPLETED history entry. */
+/** Where the worker was, as recorded on a worker's history entry. */
 export type EventLocationInput = EventLocation;
 
 export interface JobEventInput {
@@ -95,18 +126,30 @@ export interface JobEventInput {
   readonly toStatus: JobStatus;
   readonly actorId: string;
   readonly assigneeId?: string;
+  readonly reason?: string;
   readonly location?: EventLocationInput;
 }
 
 export type JobFieldChanges = Omit<
   Prisma.JobUncheckedUpdateManyInput,
-  'id' | 'version' | 'createdAt' | 'updatedAt' | 'createdById'
+  | 'id'
+  | 'version'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'createdById'
+  | 'organizationId'
 >;
 
 /** Commands a device may send with an Idempotency-Key. */
 export type JobOperation =
+  | 'job.accept'
+  | 'job.decline'
+  | 'job.depart'
+  | 'job.arrive'
   | 'job.start'
   | 'job.complete'
+  | 'job.submit'
+  | 'job.fail'
   | 'job.note.add'
   | 'job.evidence.add'
   | 'job.message.send';
@@ -125,6 +168,16 @@ export interface NoteInput {
   readonly authorId: string;
   readonly body: string;
   readonly occurredAt: Date;
+}
+
+/** A product line created with an operation (or with an order collection's submission). */
+export interface JobLineInput {
+  readonly productId: string;
+  readonly productName: string;
+  readonly sku: string;
+  readonly orderItemId: string | null;
+  readonly expectedQuantity: number | null;
+  readonly quantity: number | null;
 }
 
 /** The Idempotency-Key was recorded by a concurrent request first: replay that one. */
@@ -181,17 +234,22 @@ const isUniqueViolation = (error: unknown): boolean =>
   error instanceof Prisma.PrismaClientKnownRequestError &&
   error.code === 'P2002';
 
-type Tx = Prisma.TransactionClient;
+export type Tx = Prisma.TransactionClient;
+
+/** Work done in a transition's transaction, after the job row was updated. */
+export type TransitionWork = (tx: Tx) => Promise<void>;
 
 /**
- * Owns the `jobs`, `job_checklist_items`, `job_events`, `job_notes`, `job_evidence`,
- * `job_messages` and `processed_mutations` tables: the only code in the API that queries them (docs/backend-architecture.md, "Inside a
- * module").
+ * Owns the `jobs`, `job_checklist_items`, `job_lines`, `job_events`, `job_notes`,
+ * `job_evidence`, `job_messages` and `processed_mutations` tables: the only code in the API
+ * that writes them (docs/backend-architecture.md, "Inside a module"). Payments and order
+ * balances are written by the shops module's ledger, called from inside these transactions.
  *
  * Every change is a compare-and-set on `version`: the UPDATE only matches the row version the
  * service decided on, so two concurrent commands can never both apply (for example a worker
- * starting a job while a manager reassigns it). The loser gets `null` and reports a conflict.
- * Each change, its history event and its idempotency record are written in one transaction.
+ * accepting an operation while a manager reassigns it). The loser gets `null` and reports a
+ * conflict. Each change, its history event, its idempotency record and its ledger writes are
+ * one transaction.
  */
 @Injectable()
 export class JobsRepository {
@@ -216,12 +274,15 @@ export class JobsRepository {
     hasMore: boolean;
   }> {
     const where: Prisma.JobWhereInput = {
+      ...scopeWhere(filter),
       ...(filter.statuses !== undefined && {
         status: { in: [...filter.statuses] },
       }),
+      ...(filter.types !== undefined && { type: { in: [...filter.types] } }),
       ...(filter.assignedWorkerId !== undefined && {
         assignedWorkerId: filter.assignedWorkerId,
       }),
+      ...(filter.shopId !== undefined && { shopId: filter.shopId }),
       ...(filter.cursor !== undefined && after(filter.cursor, filter.order)),
     };
     const rows = await this.prisma.job.findMany({
@@ -237,12 +298,11 @@ export class JobsRepository {
   }
 
   /**
-   * The manager dashboard's figures at `now`: counts only (no job rows), read in one
-   * REPEATABLE READ transaction so they are consistent with each other. The status and
-   * scheduled-time counts use the existing status/scheduled_at indexes; the activity feed
-   * reads the newest job_events rows.
+   * The dashboard's operation figures at `now`, within `scope`: counts only (no job rows),
+   * read in one REPEATABLE READ transaction so they are consistent with each other.
    */
-  async overview(now: Date): Promise<OverviewRecord> {
+  async overview(scope: JobScopeFilter, now: Date): Promise<OverviewRecord> {
+    const base = scopeWhere(scope);
     const open = { in: [...OPEN_STATUSES] };
     const recentSince = new Date(now.getTime() - RECENT_CLOSED_MS);
     const [
@@ -251,20 +311,23 @@ export class JobsRepository {
       dueNext24Hours,
       completedLast7Days,
       cancelledLast7Days,
+      failedLast7Days,
       byWorker,
       recentActivity,
     ] = await this.prisma.$transaction(
       [
         this.prisma.job.groupBy({
           by: ['status'],
+          where: base,
           orderBy: { status: 'asc' },
           _count: { _all: true },
         }),
         this.prisma.job.count({
-          where: { status: open, scheduledAt: { lt: now } },
+          where: { ...base, status: open, scheduledAt: { lt: now } },
         }),
         this.prisma.job.count({
           where: {
+            ...base,
             status: open,
             scheduledAt: {
               gte: now,
@@ -273,21 +336,34 @@ export class JobsRepository {
           },
         }),
         this.prisma.job.count({
-          where: { status: 'COMPLETED', completedAt: { gte: recentSince } },
+          where: {
+            ...base,
+            status: 'COMPLETED',
+            completedAt: { gte: recentSince },
+          },
         }),
         this.prisma.job.count({
-          where: { status: 'CANCELLED', cancelledAt: { gte: recentSince } },
+          where: {
+            ...base,
+            status: 'CANCELLED',
+            cancelledAt: { gte: recentSince },
+          },
+        }),
+        this.prisma.job.count({
+          where: { ...base, status: 'FAILED', failedAt: { gte: recentSince } },
         }),
         this.prisma.job.groupBy({
           by: ['assignedWorkerId', 'status'],
           where: {
-            status: { in: ['ASSIGNED', 'IN_PROGRESS'] },
+            ...base,
+            status: { in: [...WAITING_STATUSES, ...BUSY_STATUSES] },
             assignedWorkerId: { not: null },
           },
           orderBy: [{ assignedWorkerId: 'asc' }, { status: 'asc' }],
           _count: { _all: true },
         }),
         this.prisma.jobEvent.findMany({
+          where: { job: base },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           take: ACTIVITY_LIMIT,
           include: activityInclude,
@@ -332,8 +408,56 @@ export class JobsRepository {
       dueNext24Hours,
       completedLast7Days,
       cancelledLast7Days,
+      failedLast7Days,
       recentActivity,
     };
+  }
+
+  /** Workers (of `workerIds`) with an operation under way: the dashboard's "busy". */
+  async busyWorkerIds(
+    organizationId: string,
+    workerIds: readonly string[],
+  ): Promise<string[]> {
+    const rows = await this.prisma.job.findMany({
+      where: {
+        organizationId,
+        assignedWorkerId: { in: [...workerIds] },
+        status: { in: [...BUSY_STATUSES] },
+      },
+      select: { assignedWorkerId: true },
+      distinct: ['assignedWorkerId'],
+    });
+    return rows.flatMap(row =>
+      row.assignedWorkerId === null ? [] : [row.assignedWorkerId],
+    );
+  }
+
+  /** Shop visits and arrivals for the dashboard's shop figures. */
+  async shopActivity(
+    scope: JobScopeFilter,
+    shopIds: readonly string[] | undefined,
+    since: Date,
+  ): Promise<{ visitedToday: number; pendingVisits: number }> {
+    const [visited, pendingVisits] = await Promise.all([
+      // Any operation at a shop in scope counts as a visit, whoever made it.
+      this.prisma.job.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          shopId: shopIds === undefined ? { not: null } : { in: [...shopIds] },
+          arrivedAt: { gte: since },
+        },
+        select: { shopId: true },
+        distinct: ['shopId'],
+      }),
+      this.prisma.job.count({
+        where: {
+          ...scopeWhere(scope),
+          type: 'SHOP_VISIT',
+          status: { in: [...OPEN_STATUSES] },
+        },
+      }),
+    ]);
+    return { visitedToday: visited.length, pendingVisits };
   }
 
   /**
@@ -349,9 +473,9 @@ export class JobsRepository {
       where: {
         assignedWorkerId: workerId,
         OR: [
-          { status: { in: ['ASSIGNED', 'IN_PROGRESS'] } },
+          { status: { in: [...OPEN_STATUSES] } },
           {
-            status: { in: ['COMPLETED', 'CANCELLED'] },
+            status: { in: ['COMPLETED', 'CANCELLED', 'FAILED'] },
             updatedAt: { gte: closedSince },
           },
         ],
@@ -362,32 +486,43 @@ export class JobsRepository {
     });
   }
 
+  /** Creates an operation with its checklist, lines, first history entry and audit entry. */
   async create(
     data: Omit<
       Prisma.JobUncheckedCreateInput,
-      'id' | 'status' | 'version' | 'checklistItems' | 'events'
+      'id' | 'status' | 'version' | 'checklistItems' | 'events' | 'lines'
     >,
     checklist: readonly string[],
+    lines: readonly JobLineInput[],
     event: JobEventInput,
+    work?: (tx: Tx, jobId: string) => Promise<void>,
   ): Promise<JobDetailRecord> {
-    // Nested creates run in a single transaction.
-    const { id } = await this.prisma.job.create({
-      data: {
-        ...data,
-        checklistItems: {
-          create: checklist.map((label, position) => ({ label, position })),
+    const id = await this.prisma.$transaction(async tx => {
+      const created = await tx.job.create({
+        data: {
+          ...data,
+          checklistItems: {
+            create: checklist.map((label, position) => ({ label, position })),
+          },
+          lines: {
+            create: lines.map((line, position) => ({ ...line, position })),
+          },
+          events: { create: event },
         },
-        events: { create: event },
-      },
-      select: { id: true },
+        select: { id: true },
+      });
+      if (work !== undefined) {
+        await work(tx, created.id);
+      }
+      return created.id;
     });
     return this.findDetailOrThrow(id);
   }
 
   /**
-   * Applies field changes (and optionally a new checklist, a history event and the command's
-   * idempotency record) if the job is still at `expectedVersion`. Returns the updated job, or
-   * null if it changed meanwhile.
+   * Applies field changes (and optionally a new checklist, a history event, the command's
+   * idempotency record and further work such as the ledger's) if the job is still at
+   * `expectedVersion`. Returns the updated job, or null if it changed meanwhile.
    *
    * @throws DuplicateMutationError when a concurrent request recorded the same key first.
    */
@@ -399,6 +534,7 @@ export class JobsRepository {
       readonly checklist?: readonly string[];
       readonly event?: JobEventInput;
       readonly mutation?: MutationRecord;
+      readonly work?: TransitionWork;
     },
   ): Promise<JobDetailRecord | null> {
     try {
@@ -429,6 +565,9 @@ export class JobsRepository {
           await tx.jobEvent.create({
             data: { ...event, ...location, jobId: id },
           });
+        }
+        if (changes.work !== undefined) {
+          await changes.work(tx);
         }
       });
     } catch (error) {
@@ -515,6 +654,11 @@ export class JobsRepository {
     });
   }
 
+  /** Photos of the job with these exact bytes (a duplicate upload under a new ID). */
+  countEvidenceWithHash(jobId: string, sha256: string): Promise<number> {
+    return this.prisma.jobEvidence.count({ where: { jobId, sha256 } });
+  }
+
   /**
    * Appends a message (and the command's idempotency record) in one transaction.
    *
@@ -550,6 +694,15 @@ export class JobsRepository {
     return this.prisma.jobNote.findUnique({
       where: { id },
       select: { jobId: true, authorId: true },
+    });
+  }
+
+  findPayment(
+    id: string,
+  ): Promise<{ jobId: string | null; recordedById: string } | null> {
+    return this.prisma.payment.findUnique({
+      where: { id },
+      select: { jobId: true, recordedById: true },
     });
   }
 
@@ -591,6 +744,14 @@ async function insertMutation(tx: Tx, mutation: MutationRecord): Promise<void> {
   } catch (error) {
     throw isUniqueViolation(error) ? new DuplicateMutationError() : error;
   }
+}
+
+/** The tenant (always) and the scoped manager (when set). */
+function scopeWhere(scope: JobScopeFilter): Prisma.JobWhereInput {
+  return {
+    organizationId: scope.organizationId,
+    ...(scope.managerId !== undefined && { managerId: scope.managerId }),
+  };
 }
 
 /** Keyset condition: rows strictly after the cursor in (scheduledAt, id) order. */

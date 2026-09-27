@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
 import { AuthErrors } from '../common/errors/app-exception.js';
+import { TenancyErrors } from '../common/tenancy/scope.js';
 import type { AuthenticatedUser } from '../common/types/authenticated-user.js';
 import { APP_CONFIG, type AppConfig } from '../config/app-config.js';
 import { SessionsService } from './sessions.service.js';
@@ -62,8 +63,9 @@ export class AccessTokenVerifier {
 
   /**
    * The principal for a token whose JWT is already verified: its session must exist, belong
-   * to the token's user, be neither revoked nor expired, and its user must be active. The
-   * role comes from the database, never from the (possibly stale) token.
+   * to the token's user, be neither revoked nor expired, its user must be active and their
+   * organization (if any) not suspended. The role and the organization come from the
+   * database, never from the (possibly stale) token.
    */
   async principalFor(
     payload: Partial<AccessTokenPayload>,
@@ -85,11 +87,16 @@ export class AccessTokenVerifier {
     if (!session.user.isActive) {
       throw AuthErrors.accountDisabled();
     }
+    if (session.user.organization?.status === 'SUSPENDED') {
+      throw TenancyErrors.organizationSuspended();
+    }
 
     return {
       userId: session.userId,
       sessionId: session.id,
       role: session.user.role,
+      organizationId: session.user.organizationId,
+      organizationWideAccess: session.user.organizationWideAccess,
     };
   }
 }

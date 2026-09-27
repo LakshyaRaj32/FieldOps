@@ -9,9 +9,12 @@ import type {
 
 import {
   createTestApp,
+  joinOrganization,
   resetDatabase,
   type TestApp,
 } from './helpers/test-app.js';
+
+type JoinRole = Parameters<typeof joinOrganization>[2];
 
 /**
  * The server side of offline work (Phase 3): what a worker's device downloads, and how the
@@ -49,9 +52,10 @@ describe('Offline sync (e2e)', () => {
         lastName: 'Test',
       });
     const { user, tokens } = (response.body as { data: AuthResult }).data;
-    if (role !== 'WORKER') {
-      await t.prisma.user.update({ where: { id: user.id }, data: { role } });
-    }
+    // Phase 2-4 semantics: one manager runs the whole organization.
+    await joinOrganization(t.prisma, user.id, role as JoinRole, undefined, {
+      organizationWideAccess: role === 'MANAGER',
+    });
     return { id: user.id, token: tokens.accessToken };
   }
 

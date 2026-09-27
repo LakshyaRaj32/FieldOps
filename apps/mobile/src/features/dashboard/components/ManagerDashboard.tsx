@@ -29,8 +29,15 @@ import {
   describeHistoryEntry,
   fullName,
   LIST_VIEWS,
+  money,
 } from '../../jobs/presentation';
-import { completionRate, formatPercent, openJobs } from '../dashboardMetrics';
+import {
+  completionRate,
+  formatPercent,
+  openJobs,
+  underWay,
+  waiting,
+} from '../dashboardMetrics';
 import { MetricGrid, MetricGridSkeleton, type Metric } from './MetricTile';
 import { StatusBreakdown } from './StatusBreakdown';
 
@@ -46,63 +53,156 @@ const ACTIVITY_ICONS: Readonly<
 > = {
   [JobEventType.CREATED]: { icon: 'add-circle-outline', tone: 'neutral' },
   [JobEventType.ASSIGNED]: { icon: 'person-add-outline', tone: 'info' },
+  [JobEventType.ACCEPTED]: { icon: 'thumbs-up-outline', tone: 'info' },
+  [JobEventType.DECLINED]: {
+    icon: 'return-down-back-outline',
+    tone: 'warning',
+  },
+  [JobEventType.DEPARTED]: { icon: 'navigate-outline', tone: 'primary' },
+  [JobEventType.ARRIVED]: { icon: 'location-outline', tone: 'primary' },
   [JobEventType.STARTED]: { icon: 'play-circle-outline', tone: 'primary' },
+  [JobEventType.SUBMITTED]: { icon: 'cloud-upload-outline', tone: 'warning' },
+  [JobEventType.VERIFIED]: {
+    icon: 'shield-checkmark-outline',
+    tone: 'success',
+  },
+  [JobEventType.REJECTED]: { icon: 'arrow-undo-outline', tone: 'danger' },
   [JobEventType.COMPLETED]: {
     icon: 'checkmark-circle-outline',
     tone: 'success',
   },
+  [JobEventType.FAILED]: { icon: 'alert-circle-outline', tone: 'danger' },
   [JobEventType.CANCELLED]: { icon: 'close-circle-outline', tone: 'danger' },
+  [JobEventType.RESCHEDULED]: { icon: 'calendar-outline', tone: 'info' },
 };
 
-/** The overview's headline figures, all from the server's counts. */
+/** The operations figures, all from the server's counts. */
 export function overviewMetrics(overview: JobOverview): Metric[] {
   const counts = overview.statusCounts;
   const rate = completionRate(
     overview.completedLast7Days,
     overview.cancelledLast7Days,
+    overview.failedLast7Days,
   );
   return [
     {
-      label: 'Open jobs',
+      label: 'Open',
       value: String(openJobs(counts)),
       icon: 'briefcase-outline',
       tone: 'primary',
-      caption: `${counts.PENDING} unassigned`,
+      caption: `${counts.PENDING} unassigned · ${waiting(counts)} assigned`,
+    },
+    {
+      label: 'Under way',
+      value: String(underWay(counts)),
+      icon: 'navigate-outline',
+      tone: 'info',
+      caption: 'On the way, at the shop or working',
+    },
+    {
+      label: 'To verify',
+      value: String(overview.awaitingVerification),
+      icon: 'shield-checkmark-outline',
+      tone: overview.awaitingVerification > 0 ? 'warning' : 'neutral',
+      caption: 'Submitted results',
     },
     {
       label: 'Overdue',
       value: String(overview.overdue),
       icon: 'alarm-outline',
       tone: overview.overdue > 0 ? 'danger' : 'neutral',
-      caption: 'Open, past their time',
-    },
-    {
-      label: 'Due in 24 hours',
-      value: String(overview.dueNext24Hours),
-      icon: 'time-outline',
-      tone: 'warning',
-    },
-    {
-      label: 'In progress',
-      value: String(counts.IN_PROGRESS),
-      icon: 'play-circle-outline',
-      tone: 'info',
-      caption: `${counts.ASSIGNED} assigned, not started`,
+      caption: `${overview.dueNext24Hours} due in 24 hours`,
     },
     {
       label: 'Completed',
       value: String(overview.completedLast7Days),
       icon: 'checkmark-circle-outline',
       tone: 'success',
-      caption: 'Last 7 days',
+      caption: `Last 7 days · ${formatPercent(rate)} of closed`,
     },
     {
-      label: 'Completion rate',
-      value: formatPercent(rate),
-      icon: 'trending-up-outline',
+      label: 'Failed',
+      value: String(overview.failedLast7Days),
+      icon: 'alert-circle-outline',
+      tone: overview.failedLast7Days > 0 ? 'danger' : 'neutral',
+      caption: 'Last 7 days',
+    },
+  ];
+}
+
+/** Money in scope, formatted in the organization's currency. */
+export function collectionMetrics(overview: JobOverview): Metric[] {
+  const { collections } = overview;
+  const amount = (value: number) => money(value, collections.currency);
+  return [
+    {
+      label: 'Outstanding',
+      value: amount(collections.outstanding),
+      icon: 'wallet-outline',
+      tone: 'primary',
+      caption: 'Unpaid on open orders',
+    },
+    {
+      label: 'Overdue',
+      value: amount(collections.overdue),
+      icon: 'alarm-outline',
+      tone: collections.overdue > 0 ? 'danger' : 'neutral',
+      caption: 'Past the due date',
+    },
+    {
+      label: 'Due today',
+      value: amount(collections.dueToday),
+      icon: 'today-outline',
+      tone: 'warning',
+    },
+    {
+      label: 'Collected today',
+      value: amount(collections.collectedToday),
+      icon: 'cash-outline',
       tone: 'success',
-      caption:
-        rate === null ? 'No jobs closed in 7 days' : 'Of jobs closed in 7 days',
+      caption: 'Verified payments',
+    },
+    {
+      label: 'To verify',
+      value: amount(collections.pendingVerification),
+      icon: 'hourglass-outline',
+      tone: collections.pendingVerification > 0 ? 'warning' : 'neutral',
+      caption: 'Collected, not verified',
+    },
+  ];
+}
+
+/** The team and shop coverage. */
+export function teamMetrics(overview: JobOverview): Metric[] {
+  const { workers, shops } = overview;
+  return [
+    {
+      label: 'Workers',
+      value: String(workers.total),
+      icon: 'people-outline',
+      tone: 'primary',
+      caption: `${workers.online} online now`,
+    },
+    {
+      label: 'Available',
+      value: String(workers.available),
+      icon: 'person-outline',
+      tone: 'success',
+      caption: `${workers.busy} busy`,
+    },
+    {
+      label: 'Shops',
+      value: String(shops.total),
+      icon: 'storefront-outline',
+      tone: 'primary',
+      caption: `${shops.visitedToday} visited today`,
+    },
+    {
+      label: 'Pending visits',
+      value: String(shops.pendingVisits),
+      icon: 'walk-outline',
+      tone: shops.pendingVisits > 0 ? 'warning' : 'neutral',
+      caption: 'Open shop visits',
     },
   ];
 }
@@ -155,6 +255,26 @@ export function ManagerDashboard({
       </View>
 
       {overview !== undefined ? (
+        <>
+          <View style={{ gap: theme.spacing.md }}>
+            <SectionTitle title="Collections" icon="wallet-outline" />
+            <MetricGrid metrics={collectionMetrics(overview)} />
+          </View>
+          <View style={{ gap: theme.spacing.md }}>
+            <SectionTitle
+              title={
+                overview.scope === 'team'
+                  ? 'My team and shops'
+                  : 'Team and shops'
+              }
+              icon="people-outline"
+            />
+            <MetricGrid metrics={teamMetrics(overview)} />
+          </View>
+        </>
+      ) : null}
+
+      {overview !== undefined ? (
         <StatusBreakdown counts={overview.statusCounts} />
       ) : null}
 
@@ -163,7 +283,7 @@ export function ManagerDashboard({
           title="Needs a worker"
           icon="person-add-outline"
           args={UNASSIGNED}
-          emptyTitle="Every job has a worker"
+          emptyTitle="Every operation has a worker"
           onOpenJob={onOpenJob}
           onOpenJobs={onOpenJobs}
         />
@@ -173,8 +293,8 @@ export function ManagerDashboard({
         title="Up next"
         icon="calendar-outline"
         args={UP_NEXT}
-        emptyTitle="No open jobs"
-        emptyDescription="Create a job in the Jobs tab and assign it to a worker."
+        emptyTitle="No open operations"
+        emptyDescription="Create an operation in the Operations tab and assign it to a worker."
         onOpenJob={onOpenJob}
         onOpenJobs={onOpenJobs}
       />
@@ -260,12 +380,7 @@ function JobListCard({
         title={title}
         icon={icon}
         accessory={
-          <Button
-            label="All jobs"
-            variant="ghost"
-            size="sm"
-            onPress={onOpenJobs}
-          />
+          <Button label="All" variant="ghost" size="sm" onPress={onOpenJobs} />
         }
       />
       {body}
@@ -288,7 +403,7 @@ function WorkloadCard({
     <Card>
       <SectionTitle title="Team workload" icon="people-outline" />
       {workload.length === 0 ? (
-        <AppText tone="muted">No worker has open jobs right now.</AppText>
+        <AppText tone="muted">No worker has open operations right now.</AppText>
       ) : (
         workload.map(entry => {
           return (
@@ -384,7 +499,8 @@ function ActivityCard({
       <SectionTitle title="Recent activity" icon="pulse-outline" />
       {activity.length === 0 ? (
         <AppText tone="muted">
-          Job changes (created, assigned, started, completed) appear here.
+          Every step of your operations (assigned, accepted, arrived, submitted,
+          verified) appears here.
         </AppText>
       ) : (
         activity.map(entry => {

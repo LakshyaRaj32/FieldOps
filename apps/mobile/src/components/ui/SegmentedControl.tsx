@@ -11,7 +11,8 @@ export interface SegmentedOption<T extends string> {
 
 export interface SegmentedControlProps<T extends string> {
   readonly options: readonly SegmentedOption<T>[];
-  readonly value: T;
+  /** Null: nothing chosen yet (for example an unanswered question). */
+  readonly value: T | null;
   readonly onChange: (value: T) => void;
   readonly accessibilityLabel: string;
 }

@@ -7,6 +7,7 @@ import {
 } from '../src/auth/types/jwt-payload.js';
 import {
   createTestApp,
+  joinOrganization,
   resetDatabase,
   type TestApp,
 } from './helpers/test-app.js';
@@ -144,7 +145,7 @@ describe('Authentication (e2e)', () => {
       const response = await t
         .http()
         .post('/api/v1/auth/register')
-        .send(registration({ role: 'ADMIN' }));
+        .send(registration({ role: 'ORGANIZATION_ADMIN' }));
 
       expect(response.status).toBe(400);
       expect(response.body.error.code).toBe('VALIDATION_ERROR');
@@ -480,10 +481,7 @@ describe('Authentication (e2e)', () => {
 
     it('allows an ADMIN, using the current role from the database', async () => {
       const { user, tokens } = await register();
-      await t.prisma.user.update({
-        where: { id: user.id },
-        data: { role: 'ADMIN' },
-      });
+      await joinOrganization(t.prisma, user.id, 'ORGANIZATION_ADMIN');
 
       // Same access token (it still says WORKER): the role is read from the database.
       const response = await t
@@ -493,16 +491,13 @@ describe('Authentication (e2e)', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.data).toEqual([
-        expect.objectContaining({ id: user.id, role: 'ADMIN' }),
+        expect.objectContaining({ id: user.id, role: 'ORGANIZATION_ADMIN' }),
       ]);
     });
 
     it('validates query parameters', async () => {
       const { user, tokens } = await register();
-      await t.prisma.user.update({
-        where: { id: user.id },
-        data: { role: 'ADMIN' },
-      });
+      await joinOrganization(t.prisma, user.id, 'ORGANIZATION_ADMIN');
 
       const response = await t
         .http()

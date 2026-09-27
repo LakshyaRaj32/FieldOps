@@ -6,7 +6,7 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
-import { Role, type JobSummary } from '@fieldops/types';
+import type { JobSummary } from '@fieldops/types';
 
 import type { JobsScreenProps } from '../../../app/navigation/types';
 import { EmptyState } from '../../../components/common/EmptyState';
@@ -21,6 +21,7 @@ import {
 import { useAppSelector } from '../../../store/hooks';
 import { selectSessionUser } from '../../../store/slices/sessionSlice';
 import { useTheme } from '../../../theme';
+import { isStaff } from '../../auth/roles';
 import { useListJobsInfiniteQuery } from '../api/jobsApi';
 import { JobCard } from '../components/JobCard';
 import { useLocalJobs, useOfflineJobs } from '../data/OfflineJobsContext';
@@ -36,17 +37,23 @@ const EMPTY: Readonly<
 > = {
   worker: {
     active: [
-      'No active jobs',
-      'Jobs assigned to you appear here and stay available offline.',
+      'Nothing assigned to you',
+      'Operations assigned to you appear here and stay available offline.',
     ],
     closed: [
       'Nothing done yet',
-      'Jobs you completed, or that were cancelled, in the last 7 days.',
+      'Operations you completed, or that were cancelled or failed, in the last 7 days.',
     ],
   },
   manager: {
-    active: ['No open jobs', 'Create a job, then assign it to a worker.'],
-    closed: ['Nothing closed yet', 'Completed and cancelled jobs appear here.'],
+    active: [
+      'No open operations',
+      'Create an operation, then assign it to a worker.',
+    ],
+    closed: [
+      'Nothing closed yet',
+      'Completed, cancelled and failed operations appear here.',
+    ],
   },
 };
 
@@ -59,9 +66,8 @@ export function JobsScreen({
   navigation,
 }: JobsScreenProps<'JobList'>): React.JSX.Element {
   const theme = useTheme();
-  const role = useAppSelector(selectSessionUser)?.role;
   const [view, setView] = useState<JobListView>('active');
-  const isManager = role === Role.MANAGER || role === Role.ADMIN;
+  const isManager = isStaff(useAppSelector(selectSessionUser));
   const openJob = (job: JobSummary) =>
     navigation.navigate('JobDetail', { jobId: job.id });
 
@@ -76,7 +82,7 @@ export function JobsScreen({
       {/* UX only: the API enforces who may create jobs. */}
       {isManager ? (
         <Button
-          label="New job"
+          label="New operation"
           icon="add-circle-outline"
           onPress={() => navigation.navigate('JobForm')}
         />

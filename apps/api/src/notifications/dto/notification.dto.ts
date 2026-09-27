@@ -27,8 +27,11 @@ export class NotificationDto implements AppNotification {
   @ApiProperty({ enum: Object.values(NotificationType) })
   readonly type: NotificationType;
 
-  @ApiProperty({ format: 'uuid' })
-  readonly jobId: string;
+  @ApiProperty({ type: String, format: 'uuid', nullable: true })
+  readonly jobId: string | null;
+
+  @ApiProperty({ type: String, format: 'uuid', nullable: true })
+  readonly shopId: string | null;
 
   @ApiProperty({ example: 'New job assigned' })
   readonly title: string;
@@ -47,6 +50,7 @@ export class NotificationDto implements AppNotification {
       id: row.id,
       type: row.type,
       jobId: row.jobId,
+      shopId: row.shopId,
       title: row.title,
       body: row.body,
       createdAt: row.createdAt.toISOString(),

@@ -2,12 +2,16 @@ import { Injectable } from '@nestjs/common';
 
 import { PrismaService } from '../database/prisma.service.js';
 import type {
+  Organization,
   Session,
   SessionRevocationReason,
   User,
 } from '../generated/prisma/client.js';
 
-export type SessionWithUser = Session & { user: User };
+export type UserWithOrganization = User & {
+  organization: Organization | null;
+};
+export type SessionWithUser = Session & { user: UserWithOrganization };
 
 /** Longest User-Agent kept; matches the column size. */
 const USER_AGENT_MAX_LENGTH = 255;
@@ -41,7 +45,7 @@ export class SessionsService {
   findWithUser(id: string): Promise<SessionWithUser | null> {
     return this.prisma.session.findUnique({
       where: { id },
-      include: { user: true },
+      include: { user: { include: { organization: true } } },
     });
   }
 
@@ -83,6 +87,30 @@ export class SessionsService {
       data: { revokedAt: now, revokedReason: reason },
     });
     return count === 1;
+  }
+
+  /**
+   * Revokes every active session of a user except `keepSessionId` (a password change keeps
+   * the device that made it signed in). Returns the IDs revoked.
+   */
+  async revokeOthers(
+    userId: string,
+    keepSessionId: string,
+    reason: SessionRevocationReason,
+    now: Date = new Date(),
+  ): Promise<string[]> {
+    const sessions = await this.prisma.session.findMany({
+      where: { userId, revokedAt: null, id: { not: keepSessionId } },
+      select: { id: true },
+    });
+    const ids = sessions.map(session => session.id);
+    if (ids.length > 0) {
+      await this.prisma.session.updateMany({
+        where: { id: { in: ids }, revokedAt: null },
+        data: { revokedAt: now, revokedReason: reason },
+      });
+    }
+    return ids;
   }
 
   /**

@@ -7,9 +7,14 @@ import type { JobStatus } from './job-enums.js';
 const STATUS_LABELS: Readonly<Record<JobStatus, string>> = {
   PENDING: 'pending',
   ASSIGNED: 'assigned',
+  ACCEPTED: 'accepted',
+  EN_ROUTE: 'on the way',
+  ARRIVED: 'at the shop',
   IN_PROGRESS: 'in progress',
+  SUBMITTED: 'waiting for verification',
   COMPLETED: 'completed',
   CANCELLED: 'cancelled',
+  FAILED: 'failed',
 };
 
 /** Factories for the failures the jobs module raises, so codes and messages stay consistent. */

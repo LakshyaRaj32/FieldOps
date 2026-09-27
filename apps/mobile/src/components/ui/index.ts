@@ -8,6 +8,11 @@ export {
 } from './Button';
 export { Card, type CardProps } from './Card';
 export {
+  ChoiceChips,
+  type ChoiceChipsProps,
+  type ChoiceOption,
+} from './ChoiceChips';
+export {
   Icon,
   iconColor,
   type IconName,
@@ -15,6 +20,11 @@ export {
   type IconSize,
   type IconTone,
 } from './Icon';
+export {
+  OptionList,
+  type OptionItem,
+  type OptionListProps,
+} from './OptionList';
 export { Screen, type ScreenProps } from './Screen';
 export { SectionTitle, type SectionTitleProps } from './SectionTitle';
 export {
@@ -32,3 +42,4 @@ export {
   type TextFieldHandle,
   type TextFieldProps,
 } from './TextField';
+export { ToggleRow, type ToggleRowProps } from './ToggleRow';

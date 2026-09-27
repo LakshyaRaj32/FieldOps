@@ -1,3 +1,8 @@
+import {
+  OPEN_STATUSES as SHARED_OPEN_STATUSES,
+  UNDER_WAY_STATUSES,
+} from '@fieldops/shared';
+
 import { JobStatus } from '../job-enums.js';
 
 /**
@@ -6,12 +11,17 @@ import { JobStatus } from '../job-enums.js';
  * database.
  */
 
-/** Statuses that still need work. */
-export const OPEN_STATUSES: readonly JobStatus[] = [
-  JobStatus.PENDING,
+/** Statuses that still need work (every non-terminal status). */
+export const OPEN_STATUSES: readonly JobStatus[] = SHARED_OPEN_STATUSES;
+
+/** A worker has it but has not set off yet. */
+export const WAITING_STATUSES: readonly JobStatus[] = [
   JobStatus.ASSIGNED,
-  JobStatus.IN_PROGRESS,
+  JobStatus.ACCEPTED,
 ];
+
+/** A worker is on it right now (en route, arrived, in progress). */
+export const BUSY_STATUSES: readonly JobStatus[] = UNDER_WAY_STATUSES;
 
 /** "Due soon" window and the window for recently closed jobs (rolling, no time zone). */
 export const DUE_SOON_MS = 24 * 3_600_000;
@@ -29,7 +39,7 @@ interface Person {
 
 export interface OverviewCounts {
   readonly byStatus: readonly { status: JobStatus; count: number }[];
-  /** Open jobs per assignee and status (ASSIGNED / IN_PROGRESS only). */
+  /** Open jobs per assignee and status (waiting and busy statuses only). */
   readonly byWorker: readonly {
     workerId: string;
     status: JobStatus;
@@ -78,9 +88,10 @@ export function workload(
     };
     entries.set(workerId, {
       ...entry,
-      assigned: entry.assigned + (status === JobStatus.ASSIGNED ? count : 0),
+      assigned:
+        entry.assigned + (WAITING_STATUSES.includes(status) ? count : 0),
       inProgress:
-        entry.inProgress + (status === JobStatus.IN_PROGRESS ? count : 0),
+        entry.inProgress + (BUSY_STATUSES.includes(status) ? count : 0),
     });
   }
   const name = (person: Person) => `${person.firstName} ${person.lastName}`;

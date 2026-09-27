@@ -76,6 +76,12 @@ export function NotificationsScreen({
         params: { jobId: route.jobId },
         initial: false,
       });
+    } else if (route?.screen === 'shop') {
+      navigation.navigate('Shops', {
+        screen: 'ShopDetail',
+        params: { shopId: route.shopId },
+        initial: false,
+      });
     }
   };
 

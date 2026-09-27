@@ -9,27 +9,51 @@ import type { RootStackParamList } from './types';
  */
 export const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
-let pendingJobId: string | null = null;
+let pending:
+  | { readonly screen: 'job'; readonly id: string }
+  | { readonly screen: 'shop'; readonly id: string }
+  | null = null;
 
 function tryNavigate(): void {
-  if (pendingJobId === null || !navigationRef.isReady()) {
+  if (pending === null || !navigationRef.isReady()) {
     return;
   }
   const state = navigationRef.getRootState();
-  // Only the signed-in App flow has job screens.
+  // Only the signed-in App flow has these screens.
   if (state === undefined || !state.routeNames.includes('App')) {
     return;
   }
-  const jobId = pendingJobId;
-  pendingJobId = null;
-  navigationRef.navigate('App', {
-    screen: 'Jobs',
-    params: { screen: 'JobDetail', params: { jobId }, initial: false },
-  });
+  const target = pending;
+  pending = null;
+  if (target.screen === 'job') {
+    navigationRef.navigate('App', {
+      screen: 'Jobs',
+      params: {
+        screen: 'JobDetail',
+        params: { jobId: target.id },
+        initial: false,
+      },
+    });
+  } else {
+    navigationRef.navigate('App', {
+      screen: 'Shops',
+      params: {
+        screen: 'ShopDetail',
+        params: { shopId: target.id },
+        initial: false,
+      },
+    });
+  }
 }
 
 export function openJobWhenReady(jobId: string): void {
-  pendingJobId = jobId;
+  pending = { screen: 'job', id: jobId };
+  tryNavigate();
+}
+
+/** An overdue payment's push: the shop's account (staff only receive these). */
+export function openShopWhenReady(shopId: string): void {
+  pending = { screen: 'shop', id: shopId };
   tryNavigate();
 }
 

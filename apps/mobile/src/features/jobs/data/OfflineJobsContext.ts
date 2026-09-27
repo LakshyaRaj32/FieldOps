@@ -1,5 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 
+import type { Product } from '@fieldops/types';
+
 import type { LocalJobStore } from './localJobStore';
 import type { JobSyncEngine, SyncStatus } from './syncEngine';
 import type { LocalEvidenceFile, LocalJob, OutboxEntry } from './types';
@@ -107,4 +109,9 @@ export function useLocalEvidenceFiles(
 /** The job's commands not yet confirmed by the server (to mark messages as unsent). */
 export function useActiveEntries(jobId: string): LocalQuery<OutboxEntry[]> {
   return useLocalQuery(store => store.activeEntries(jobId), `active:${jobId}`);
+}
+
+/** The catalog the working set brought along (for order collections), from the phone. */
+export function useLocalCatalog(): LocalQuery<Product[]> {
+  return useLocalQuery(store => store.getCatalog(), 'catalog');
 }

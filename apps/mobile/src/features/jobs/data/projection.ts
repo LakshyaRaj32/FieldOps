@@ -1,18 +1,21 @@
-import { nextStatus } from '@fieldops/shared';
+import { nextStatus, type JobTransition } from '@fieldops/shared';
 import { distanceMeters } from '@fieldops/shared/geo';
 import {
   JobAction,
+  JobStatus,
   type ActionLocation,
   type DeviceLocation,
   type JobDetail,
   type JobEvidence,
+  type JobLine,
   type JobMessage,
   type JobNote,
-  type JobStatus,
+  type JobType,
+  type PaymentRecord,
   type UserSummary,
 } from '@fieldops/types';
 
-import type { OutboxEntry } from './types';
+import { STATUS_COMMANDS, type OutboxEntry, type SubmitPayload } from './types';
 
 /**
  * The local view of a job: the last server copy with the worker's pending commands applied
@@ -28,35 +31,21 @@ export function projectJob(
   pending: readonly OutboxEntry[],
   me: UserSummary,
 ): JobDetail {
-  let status: JobStatus = server.status;
-  let startedAt = server.startedAt;
-  let completedAt = server.completedAt;
-  let startLocation = server.startLocation;
-  let completeLocation = server.completeLocation;
+  let job: JobDetail = server;
   const notes: JobNote[] = [...server.fieldNotes];
   const evidence: JobEvidence[] = [...server.evidence];
   const messages: JobMessage[] = [...server.messages];
 
   for (const entry of pending) {
+    const action = STATUS_COMMANDS[entry.type];
+    if (action !== undefined) {
+      const to = nextStatus(job.type, job.status, action as JobTransition);
+      if (to !== undefined) {
+        job = applyStatus(job, entry, to, me);
+      }
+      continue;
+    }
     switch (entry.type) {
-      case 'job.start': {
-        const to = nextStatus(status, 'start');
-        if (to !== undefined) {
-          status = to;
-          startedAt = entry.occurredAt;
-          startLocation = estimate(server, entry.payload?.location ?? null);
-        }
-        break;
-      }
-      case 'job.complete': {
-        const to = nextStatus(status, 'complete');
-        if (to !== undefined) {
-          status = to;
-          completedAt = entry.occurredAt;
-          completeLocation = estimate(server, entry.payload?.location ?? null);
-        }
-        break;
-      }
       case 'job.note.add': {
         const { noteId, body } = entry.payload;
         if (!notes.some(note => note.id === noteId)) {
@@ -100,20 +89,132 @@ export function projectJob(
         }
         break;
       }
+      default:
+        break;
     }
   }
 
   return {
-    ...server,
-    status,
-    startedAt,
-    completedAt,
-    startLocation,
-    completeLocation,
+    ...job,
     fieldNotes: notes,
     evidence,
     messages,
-    allowedActions: workerActions(status),
+    allowedActions: workerActions(job.type, job.status),
+  };
+}
+
+/** A status command applied locally, with the fields the server would set. */
+function applyStatus(
+  job: JobDetail,
+  entry: OutboxEntry,
+  to: JobDetail['status'],
+  me: UserSummary,
+): JobDetail {
+  const at = entry.occurredAt;
+  const moved: JobDetail = { ...job, status: to };
+  switch (entry.type) {
+    case 'job.accept':
+      return { ...moved, acceptedAt: at };
+    case 'job.decline':
+      // Handed back: it is nobody's until the manager assigns it again.
+      return { ...moved, assignedWorker: null, acceptedAt: null };
+    case 'job.depart':
+      return moved;
+    case 'job.arrive':
+      return {
+        ...moved,
+        arrivedAt: at,
+        arrivalLocation: estimate(job, entry.payload?.location ?? null),
+      };
+    case 'job.start':
+      return {
+        ...moved,
+        startedAt: at,
+        startLocation: estimate(job, entry.payload?.location ?? null),
+      };
+    case 'job.complete':
+      return {
+        ...moved,
+        completedAt: at,
+        completeLocation: estimate(job, entry.payload?.location ?? null),
+      };
+    case 'job.fail':
+      return { ...moved, failedAt: at, failureReason: entry.payload.reason };
+    case 'job.submit':
+      return applySubmission(moved, entry.payload, at, me);
+    default:
+      return moved;
+  }
+}
+
+/** The worker's answers, counts, order lines and payment, as the server will record them. */
+function applySubmission(
+  job: JobDetail,
+  payload: SubmitPayload,
+  at: string,
+  me: UserSummary,
+): JobDetail {
+  const { request } = payload;
+  const answers = new Map(
+    (request.checklist ?? []).map(answer => [answer.itemId, answer]),
+  );
+  const counts = new Map(
+    (request.lineCounts ?? []).map(count => [count.lineId, count.quantity]),
+  );
+  let lines: JobLine[] = job.lines.map(line => ({
+    ...line,
+    quantity: counts.get(line.id) ?? line.quantity,
+  }));
+  if (request.orderLines !== undefined) {
+    lines = request.orderLines.map((line, position) => ({
+      id: `local-${position}`,
+      position,
+      productId: line.productId,
+      productName: payload.productNames[line.productId]?.name ?? 'Product',
+      sku: payload.productNames[line.productId]?.sku ?? '',
+      expectedQuantity: null,
+      quantity: line.quantity,
+    }));
+  }
+  const payments: PaymentRecord[] =
+    request.payment === undefined ||
+    job.payments.some(payment => payment.id === request.payment?.id)
+      ? [...job.payments]
+      : [
+          ...job.payments,
+          {
+            id: request.payment.id,
+            orderId: job.order?.id ?? '',
+            jobId: job.id,
+            amount: request.payment.amount,
+            method: request.payment.method,
+            reference: request.payment.reference ?? null,
+            status: 'PENDING_VERIFICATION',
+            collectedAt: request.payment.collectedAt,
+            recordedBy: me,
+            verifiedBy: null,
+            verifiedAt: null,
+            rejectionReason: null,
+            createdAt: at,
+          },
+        ];
+  return {
+    ...job,
+    submittedAt: at,
+    submissionNote: request.note ?? null,
+    completeLocation: estimate(job, payload.location),
+    checklist: job.checklist.map(item => {
+      const answer = answers.get(item.id);
+      return answer === undefined
+        ? item
+        : {
+            ...item,
+            checked: answer.checked,
+            responseNote: answer.note ?? null,
+          };
+    }),
+    lines,
+    payments,
   };
 }
 
@@ -137,19 +238,36 @@ function estimate(
   };
 }
 
+/** The worker's status steps in the order the server lists them (job.policy.ts). */
+const WORKER_STEPS: readonly [JobAction, JobTransition][] = [
+  [JobAction.ACCEPT, 'accept'],
+  [JobAction.DEPART, 'depart'],
+  [JobAction.ARRIVE, 'arrive'],
+  [JobAction.START, 'start'],
+  [JobAction.COMPLETE, 'complete'],
+  [JobAction.SUBMIT, 'submit'],
+];
+
 /**
- * What the assigned worker can do with a job in `status`, decided on the device with the
- * same state machine the server enforces. Every job on the device is assigned to its user
- * (the working set contains nothing else), so only the status matters here.
+ * What the assigned worker can do with a job, decided on the device with the same state
+ * machine the server enforces. Every job on the device is assigned to its user (the working
+ * set contains nothing else), so only the type and status matter, except that a job the
+ * worker handed back (PENDING) offers nothing at all.
  */
-export function workerActions(status: JobStatus): JobAction[] {
+export function workerActions(type: JobType, status: JobStatus): JobAction[] {
+  if (status === JobStatus.PENDING) {
+    return [];
+  }
+  const allows = (transition: JobTransition) =>
+    nextStatus(type, status, transition) !== undefined;
   return [
-    ...(nextStatus(status, 'start') !== undefined ? [JobAction.START] : []),
-    ...(nextStatus(status, 'complete') !== undefined
-      ? [JobAction.COMPLETE]
-      : []),
+    ...WORKER_STEPS.filter(([, transition]) => allows(transition)).map(
+      ([action]) => action,
+    ),
     JobAction.NOTE,
     JobAction.EVIDENCE,
     JobAction.MESSAGE,
+    ...(allows('decline') ? [JobAction.DECLINE] : []),
+    ...(allows('fail') ? [JobAction.FAIL] : []),
   ];
 }

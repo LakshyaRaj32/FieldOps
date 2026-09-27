@@ -17,10 +17,29 @@ describe('job overview', () => {
     ).toEqual({
       PENDING: 2,
       ASSIGNED: 0,
+      ACCEPTED: 0,
+      EN_ROUTE: 0,
+      ARRIVED: 0,
       IN_PROGRESS: 0,
+      SUBMITTED: 0,
       COMPLETED: 5,
       CANCELLED: 0,
+      FAILED: 0,
     });
+  });
+
+  it('counts accepted work as waiting and travel or arrival as under way', () => {
+    const asha = person('w-1', 'Asha');
+    expect(
+      workload(
+        [
+          { workerId: 'w-1', status: JobStatus.ACCEPTED, count: 2 },
+          { workerId: 'w-1', status: JobStatus.EN_ROUTE, count: 1 },
+          { workerId: 'w-1', status: JobStatus.ARRIVED, count: 1 },
+        ],
+        [asha],
+      ),
+    ).toEqual([{ worker: asha, assigned: 2, inProgress: 2 }]);
   });
 
   it('combines each worker’s assigned and in-progress jobs, busiest first', () => {

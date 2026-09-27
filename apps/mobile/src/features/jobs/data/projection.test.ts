@@ -179,9 +179,32 @@ describe('projectJob', () => {
 
 describe('workerActions', () => {
   it('follows the shared state machine', () => {
-    expect(workerActions('ASSIGNED')).toEqual(['start', ...OPEN_ACTIONS]);
-    expect(workerActions('IN_PROGRESS')).toEqual(['complete', ...OPEN_ACTIONS]);
-    expect(workerActions('COMPLETED')).toEqual(OPEN_ACTIONS);
-    expect(workerActions('PENDING')).toEqual(OPEN_ACTIONS);
+    expect(workerActions('GENERAL', 'ASSIGNED')).toEqual([
+      'start',
+      ...OPEN_ACTIONS,
+    ]);
+    expect(workerActions('GENERAL', 'IN_PROGRESS')).toEqual([
+      'complete',
+      ...OPEN_ACTIONS,
+    ]);
+    expect(workerActions('GENERAL', 'COMPLETED')).toEqual(OPEN_ACTIONS);
+    // Handed back (declined): nothing is the worker's to do any more.
+    expect(workerActions('GENERAL', 'PENDING')).toEqual([]);
+  });
+
+  it('walks the field lifecycle, with hand back and failure where allowed', () => {
+    const at = (status: Parameters<typeof workerActions>[1]) =>
+      workerActions('PAYMENT_COLLECTION', status);
+    expect(at('ASSIGNED')).toEqual(['accept', ...OPEN_ACTIONS, 'decline']);
+    expect(at('ACCEPTED')).toEqual([
+      'depart',
+      ...OPEN_ACTIONS,
+      'decline',
+      'fail',
+    ]);
+    expect(at('EN_ROUTE')).toEqual(['arrive', ...OPEN_ACTIONS, 'fail']);
+    expect(at('ARRIVED')).toEqual(['start', ...OPEN_ACTIONS, 'fail']);
+    expect(at('IN_PROGRESS')).toEqual(['submit', ...OPEN_ACTIONS, 'fail']);
+    expect(at('SUBMITTED')).toEqual(OPEN_ACTIONS);
   });
 });

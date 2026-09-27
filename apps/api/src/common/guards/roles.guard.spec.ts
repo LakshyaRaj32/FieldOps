@@ -8,7 +8,7 @@ import type { AuthenticatedUser } from '../types/authenticated-user.js';
 import { RolesGuard } from './roles.guard.js';
 
 class ExampleController {
-  @Roles(Role.MANAGER, Role.ADMIN)
+  @Roles(Role.MANAGER, Role.ORGANIZATION_ADMIN)
   managersOnly(): void {}
 
   anyAuthenticatedUser(): void {}
@@ -29,6 +29,8 @@ const userWith = (role: Role): AuthenticatedUser => ({
   userId: 'user-1',
   sessionId: 'session-1',
   role,
+  organizationId: 'org-1',
+  organizationWideAccess: false,
 });
 
 function codeOf(run: () => unknown): string | undefined {
@@ -51,7 +53,7 @@ describe('RolesGuard', () => {
     ).toBe(true);
   });
 
-  it.each([Role.MANAGER, Role.ADMIN])(
+  it.each([Role.MANAGER, Role.ORGANIZATION_ADMIN])(
     'allows %s on a MANAGER/ADMIN route',
     role => {
       expect(

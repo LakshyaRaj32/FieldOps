@@ -13,6 +13,7 @@ import type {
   JobSyncTransport,
   TransportResult,
 } from '../features/jobs/data/syncEngine';
+import type { WorkerStatusAction } from '../features/jobs/data/types';
 import type { AppError } from '../utils/errors';
 
 export const WORKER: UserSummary = {
@@ -29,6 +30,7 @@ const MANAGER: UserSummary = {
 export function serverJob(overrides: Partial<JobDetail> = {}): JobDetail {
   return {
     id: 'job-1',
+    type: 'GENERAL',
     title: 'AC repair',
     customerName: 'ABC Ltd',
     address: '12 MG Road',
@@ -36,6 +38,9 @@ export function serverJob(overrides: Partial<JobDetail> = {}): JobDetail {
     priority: 'NORMAL',
     status: 'ASSIGNED',
     assignedWorker: WORKER,
+    manager: MANAGER,
+    shop: null,
+    expectedAmount: null,
     version: 2,
     updatedAt: '2026-09-26T10:00:00.000Z',
     allowedActions: ['start', 'note'],
@@ -46,11 +51,23 @@ export function serverJob(overrides: Partial<JobDetail> = {}): JobDetail {
     cancellationReason: null,
     createdBy: MANAGER,
     createdAt: '2026-09-26T09:00:00.000Z',
+    acceptedAt: null,
+    arrivedAt: null,
     startedAt: null,
+    submittedAt: null,
     completedAt: null,
     cancelledAt: null,
+    failedAt: null,
+    failureReason: null,
+    order: null,
+    lines: [],
+    payments: [],
+    requiresPhoto: false,
+    submissionNote: null,
+    siteRadiusMeters: 300,
     history: [],
     fieldNotes: [],
+    arrivalLocation: null,
     startLocation: null,
     completeLocation: null,
     evidence: [],
@@ -128,12 +145,13 @@ export class FakeJobServer implements JobSyncTransport {
 
   // ---- Transport -----------------------------------------------------------------------
 
-  startJob(jobId: string, mutationId: string, request: JobCommandRequest) {
-    return this.transition('start', jobId, mutationId, request);
-  }
-
-  completeJob(jobId: string, mutationId: string, request: JobCommandRequest) {
-    return this.transition('complete', jobId, mutationId, request);
+  workerCommand(
+    action: WorkerStatusAction,
+    jobId: string,
+    mutationId: string,
+    body: object,
+  ) {
+    return this.transition(action, jobId, mutationId, body);
   }
 
   async uploadEvidence(
@@ -243,6 +261,7 @@ export class FakeJobServer implements JobSyncTransport {
         jobs: [...this.jobs.values()]
           .filter(job => job.assignedWorker?.id === WORKER.id)
           .map(job => ({ ...job, allowedActions: [] })),
+        products: [],
         generatedAt: this.tick(),
       },
     };
@@ -261,7 +280,7 @@ export class FakeJobServer implements JobSyncTransport {
         ? null
         : { ...request.location, distanceMeters: null };
     const apply = (job: JobDetail): JobDetail => {
-      const decision = decideTransition(job.status, transition);
+      const decision = decideTransition(job.type, job.status, transition);
       if (decision.kind === 'rejected') {
         throw httpError(409, 'INVALID_STATUS_TRANSITION');
       }
@@ -281,6 +300,16 @@ export class FakeJobServer implements JobSyncTransport {
           completedAt: this.tick(),
           completeLocation: recorded,
         }),
+        ...(transition === 'accept' && { acceptedAt: this.tick() }),
+        ...(transition === 'arrive' && {
+          arrivedAt: this.tick(),
+          arrivalLocation: recorded,
+        }),
+        ...(transition === 'submit' && {
+          submittedAt: this.tick(),
+          completeLocation: recorded,
+        }),
+        ...(transition === 'decline' && { assignedWorker: null }),
       };
     };
     return this.command(`job.${transition}`, jobId, mutationId, apply, request);

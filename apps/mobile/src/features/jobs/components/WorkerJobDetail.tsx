@@ -1,11 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { RefreshControl, StyleSheet, View } from 'react-native';
-import { JobAction, type DeviceLocation } from '@fieldops/types';
+import { JobAction, JobStatus, type DeviceLocation } from '@fieldops/types';
 
 import { EmptyState } from '../../../components/common/EmptyState';
 import { ErrorState } from '../../../components/common/ErrorState';
 import { LoadingState } from '../../../components/common/LoadingState';
+import { ReasonPrompt } from '../../../components/common/ReasonPrompt';
 import { AppText, Button, Screen, TextField } from '../../../components/ui';
+import { useAppSelector } from '../../../store/hooks';
+import { selectSessionUser } from '../../../store/slices/sessionSlice';
+import { currencyOf } from '../../auth/roles';
 import { evidenceFiles } from '../../../services/files/evidenceFiles';
 import { describeLocationFailure } from '../../../services/location/locationResult';
 import { getCurrentLocation } from '../../../services/location/locationService';
@@ -18,6 +22,7 @@ import { useTheme } from '../../../theme';
 import { uuidv7 } from '../../../utils/uuid';
 import {
   useActiveEntries,
+  useLocalCatalog,
   useLocalEvidenceFiles,
   useLocalJob,
   useOfflineJobs,
@@ -27,10 +32,12 @@ import { LocalCommandError } from '../data/types';
 import {
   EVIDENCE_STATE_LABELS,
   formatSchedule,
+  fullName,
   jobCommands,
   jobSyncBadge,
   type JobCommand,
 } from '../presentation';
+import type { BuiltSubmission } from '../submission';
 import { serverEvidenceSource } from './evidenceSource';
 import {
   EvidenceGallery,
@@ -49,6 +56,8 @@ import {
   JobInformation,
 } from './JobDetailSections';
 import { MessageComposer } from './MessageComposer';
+import { JobLines, JobPayments, OperationSummary } from './OperationSections';
+import { SubmissionForm } from './SubmissionForm';
 import { SyncProblemList } from './SyncProblemList';
 import { WorkerLocationPanel } from './WorkerLocationPanel';
 
@@ -66,9 +75,10 @@ const PICK_PROBLEMS: Readonly<
 };
 
 /**
- * The assigned worker's view of a job, from the phone's database. Start, complete, notes,
- * photos and messages commit locally right away (online or not) and reach the server
- * through the sync engine; nothing on this screen waits for the network.
+ * The assigned worker's view of an operation, from the phone's database. Every step (accept,
+ * on my way, arrived, start, submit, hand back, can't be done), notes, photos and messages
+ * commit locally right away (online or not) and reach the server through the sync engine;
+ * nothing on this screen waits for the network.
  */
 export function WorkerJobDetail({
   jobId,
@@ -81,6 +91,9 @@ export function WorkerJobDetail({
   const { data: problems = [] } = useProblemEntries(jobId);
   const { data: files = [] } = useLocalEvidenceFiles(jobId);
   const { data: active = [] } = useActiveEntries(jobId);
+  const { data: catalog = [] } = useLocalCatalog();
+  const currency = currencyOf(useAppSelector(selectSessionUser));
+  const [reasonFor, setReasonFor] = useState<JobCommand | null>(null);
   const [note, setNote] = useState('');
   const [noteError, setNoteError] = useState<string | undefined>();
   const [commandError, setCommandError] = useState<string | undefined>();
@@ -168,43 +181,73 @@ export function WorkerJobDetail({
   };
 
   /**
-   * Start and complete record where the worker is, when the phone can tell. Getting a fix
+   * The worker's status steps record where they are, when the phone can tell. Getting a fix
    * never blocks the work: without one (permission refused, no signal) the command is
    * saved anyway and the worker is told why no position was recorded.
    */
-  const runWithLocation = async (command: JobCommand) => {
+  const locate = async (): Promise<DeviceLocation | null> => {
     setLocationNotice(undefined);
     setLocating(true);
-    let location: DeviceLocation | null = null;
     try {
       const result = await getCurrentLocation({ request: true });
       if (result.kind === 'ok') {
-        location = result.location;
-      } else {
-        setLocationNotice(
-          `Saved without your position. ${
-            describeLocationFailure(result.kind).message
-          }`,
-        );
+        return result.location;
       }
+      setLocationNotice(
+        `Saved without your position. ${
+          describeLocationFailure(result.kind).message
+        }`,
+      );
+      return null;
     } finally {
       setLocating(false);
     }
-    perform(() =>
-      command.action === JobAction.START
-        ? store.startJob(job.id, location)
-        : store.completeJob(job.id, location),
-    );
   };
 
-  const run = (command: JobCommand) => {
-    if (
-      command.action === JobAction.START ||
-      command.action === JobAction.COMPLETE
-    ) {
-      runWithLocation(command).catch(() => undefined);
+  const withLocation = (
+    write: (location: DeviceLocation | null) => Promise<unknown>,
+  ) => {
+    locate()
+      .then(location => perform(() => write(location)))
+      .catch(() => undefined);
+  };
+
+  const run = (command: JobCommand, reason?: string) => {
+    if (command.reason !== undefined && reason === undefined) {
+      setReasonFor(command);
+      return;
+    }
+    switch (command.action) {
+      case JobAction.ACCEPT:
+        perform(() => store.acceptJob(job.id));
+        return;
+      case JobAction.DECLINE:
+        perform(() => store.declineJob(job.id, reason ?? ''));
+        return;
+      case JobAction.DEPART:
+        withLocation(location => store.departJob(job.id, location));
+        return;
+      case JobAction.ARRIVE:
+        withLocation(location => store.arriveJob(job.id, location));
+        return;
+      case JobAction.START:
+        withLocation(location => store.startJob(job.id, location));
+        return;
+      case JobAction.COMPLETE:
+        withLocation(location => store.completeJob(job.id, location));
+        return;
+      case JobAction.FAIL:
+        withLocation(location => store.failJob(job.id, reason ?? '', location));
+        return;
+      default:
+        return;
     }
   };
+
+  const submit = (built: BuiltSubmission) =>
+    withLocation(location =>
+      store.submitJob(job.id, built.request, location, built.productNames),
+    );
 
   const addNote = () => {
     const body = note.trim();
@@ -282,6 +325,7 @@ export function WorkerJobDetail({
     };
   });
 
+  const canSubmit = job.allowedActions.includes(JobAction.SUBMIT);
   const canNote = job.allowedActions.includes(JobAction.NOTE);
   const canAddEvidence = job.allowedActions.includes(JobAction.EVIDENCE);
   const canMessage = job.allowedActions.includes(JobAction.MESSAGE);
@@ -327,12 +371,36 @@ export function WorkerJobDetail({
           Saved on this phone. It will sync automatically.
         </AppText>
       ) : null}
+      {job.status === JobStatus.SUBMITTED ? (
+        <AppText tone="info">
+          Submitted. {fullName(job.manager)} will verify it; you will be told
+          either way.
+        </AppText>
+      ) : null}
+      {job.status === JobStatus.PENDING ? (
+        <AppText tone="muted">
+          You handed this back. It leaves your phone after the next sync.
+        </AppText>
+      ) : null}
+      <OperationSummary job={job} currency={currency} />
+      <JobPayments job={job} currency={currency} />
+      <JobLines job={job} />
       <JobInformation job={job} showAssignee={false} />
       <JobSiteCard job={job}>
         <WorkerLocationPanel job={job} />
       </JobSiteCard>
       <JobVisitLocations job={job} />
-      <JobChecklist job={job} />
+      {canSubmit ? (
+        <SubmissionForm
+          job={job}
+          catalog={catalog}
+          currency={currency}
+          busy={locating}
+          onSubmit={submit}
+        />
+      ) : (
+        <JobChecklist job={job} />
+      )}
       <EvidenceGallery
         items={gallery}
         {...(photoNotice !== undefined && { notice: photoNotice })}
@@ -400,6 +468,25 @@ export function WorkerJobDetail({
         }
       />
       <JobHistory job={job} />
+      <ReasonPrompt
+        request={
+          reasonFor?.reason === undefined
+            ? null
+            : {
+                ...reasonFor.reason,
+                confirmLabel: reasonFor.label,
+                destructive: reasonFor.variant === 'danger',
+              }
+        }
+        onCancel={() => setReasonFor(null)}
+        onSubmit={reason => {
+          const command = reasonFor;
+          setReasonFor(null);
+          if (command !== null) {
+            run(command, reason);
+          }
+        }}
+      />
     </Screen>
   );
 }

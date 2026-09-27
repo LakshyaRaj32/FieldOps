@@ -2,15 +2,47 @@ import type {
   DeviceLocation,
   EvidenceContentType,
   JobDetail,
+  SubmitJobRequest,
 } from '@fieldops/types';
+
+/** The worker's status commands, named like their endpoints (POST /jobs/:id/<action>). */
+export type WorkerStatusAction =
+  | 'accept'
+  | 'decline'
+  | 'depart'
+  | 'arrive'
+  | 'start'
+  | 'complete'
+  | 'submit'
+  | 'fail';
 
 /** The worker commands that work offline. Names follow the `entity.action` convention. */
 export type OutboxType =
+  | 'job.accept'
+  | 'job.decline'
+  | 'job.depart'
+  | 'job.arrive'
   | 'job.start'
   | 'job.complete'
+  | 'job.submit'
+  | 'job.fail'
   | 'job.note.add'
   | 'job.evidence.add'
   | 'job.message.send';
+
+/** Outbox types that are status commands, with the action each one sends. */
+export const STATUS_COMMANDS: Readonly<
+  Partial<Record<OutboxType, WorkerStatusAction>>
+> = {
+  'job.accept': 'accept',
+  'job.decline': 'decline',
+  'job.depart': 'depart',
+  'job.arrive': 'arrive',
+  'job.start': 'start',
+  'job.complete': 'complete',
+  'job.submit': 'submit',
+  'job.fail': 'fail',
+};
 
 /**
  * - `pending`: waiting to be sent (possibly until `nextAttemptAt`)
@@ -28,9 +60,25 @@ export type OutboxStatus =
   | 'failed'
   | 'conflict';
 
-/** Start and complete: where the worker was, if the phone had a fix (Phase 4). */
+/** Status commands: where the worker was, if the phone had a fix (Phase 4). */
 export interface StatusPayload {
   readonly location: DeviceLocation | null;
+}
+
+/** Decline and fail: why, as the worker wrote it (and where, for a failure). */
+export interface ReasonPayload extends StatusPayload {
+  readonly reason: string;
+}
+
+/**
+ * The worker's result, exactly as it will be sent (minus the location, kept apart like every
+ * status command). `productNames` lets the phone show an order collection's lines offline.
+ */
+export interface SubmitPayload extends StatusPayload {
+  readonly request: Omit<SubmitJobRequest, 'location'>;
+  readonly productNames: Readonly<
+    Record<string, { readonly name: string; readonly sku: string }>
+  >;
 }
 
 export interface NotePayload {
@@ -56,10 +104,20 @@ export interface MessagePayload {
 /** Each command type with the payload it carries. */
 export type OutboxCommand =
   | {
-      readonly type: 'job.start' | 'job.complete';
+      readonly type:
+        | 'job.accept'
+        | 'job.depart'
+        | 'job.arrive'
+        | 'job.start'
+        | 'job.complete';
       /** Null for entries written before Phase 4. */
       readonly payload: StatusPayload | null;
     }
+  | {
+      readonly type: 'job.decline' | 'job.fail';
+      readonly payload: ReasonPayload;
+    }
+  | { readonly type: 'job.submit'; readonly payload: SubmitPayload }
   | { readonly type: 'job.note.add'; readonly payload: NotePayload }
   | { readonly type: 'job.evidence.add'; readonly payload: EvidencePayload }
   | { readonly type: 'job.message.send'; readonly payload: MessagePayload };
@@ -125,7 +183,10 @@ export class LocalCommandError extends Error {
   override readonly name = 'LocalCommandError';
 
   constructor(
-    readonly code: 'JOB_NOT_FOUND' | 'INVALID_STATUS_TRANSITION',
+    readonly code:
+      | 'JOB_NOT_FOUND'
+      | 'INVALID_STATUS_TRANSITION'
+      | 'REQUIREMENTS_NOT_MET',
     message: string,
   ) {
     super(message);

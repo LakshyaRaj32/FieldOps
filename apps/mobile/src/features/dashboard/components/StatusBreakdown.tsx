@@ -4,18 +4,17 @@ import type { JobOverview } from '@fieldops/types';
 
 import { AppText, Card, SectionTitle } from '../../../components/ui';
 import { useTheme } from '../../../theme';
-import { STATUS_LABELS } from '../../jobs/presentation';
 import {
+  BUCKETS,
   formatPercent,
-  STATUS_CHART_KEYS,
   statusSegments,
   totalJobs,
 } from '../dashboardMetrics';
 
 /**
- * Every job by status as one stacked bar, with a legend that names each status and gives
- * its count and share. The legend is the readable version of the bar (text in text colors,
- * a swatch beside it), so nothing depends on telling colors apart.
+ * Every operation by stage as one stacked bar, with a legend that names each stage and
+ * gives its count and share. The legend is the readable version of the bar (text in text
+ * colors, a swatch beside it), so nothing depends on telling colors apart.
  */
 export function StatusBreakdown({
   counts,
@@ -30,7 +29,7 @@ export function StatusBreakdown({
   return (
     <Card>
       <SectionTitle
-        title="Jobs by status"
+        title="Operations by stage"
         icon="pie-chart-outline"
         accessory={
           <AppText variant="caption" tone="muted">
@@ -41,8 +40,8 @@ export function StatusBreakdown({
       <View
         accessible
         accessibilityRole="image"
-        accessibilityLabel={`Jobs by status: ${segments
-          .map(segment => `${STATUS_LABELS[segment.status]} ${segment.count}`)
+        accessibilityLabel={`Operations by stage: ${segments
+          .map(segment => `${BUCKETS[segment.bucket].label} ${segment.count}`)
           .join(', ')}`}
         style={[
           styles.bar,
@@ -54,12 +53,12 @@ export function StatusBreakdown({
       >
         {visible.map(segment => (
           <View
-            key={segment.status}
+            key={segment.bucket}
             style={[
               styles.segment,
               {
                 flexGrow: segment.count,
-                backgroundColor: theme.chart[STATUS_CHART_KEYS[segment.status]],
+                backgroundColor: theme.chart[BUCKETS[segment.bucket].chart],
               },
             ]}
           />
@@ -68,7 +67,7 @@ export function StatusBreakdown({
       <View style={{ gap: theme.spacing.xs }}>
         {segments.map(segment => (
           <View
-            key={segment.status}
+            key={segment.bucket}
             style={[styles.legendRow, { gap: theme.spacing.sm }]}
             accessible={false}
             importantForAccessibility="no-hide-descendants"
@@ -76,14 +75,11 @@ export function StatusBreakdown({
             <View
               style={[
                 styles.swatch,
-                {
-                  backgroundColor:
-                    theme.chart[STATUS_CHART_KEYS[segment.status]],
-                },
+                { backgroundColor: theme.chart[BUCKETS[segment.bucket].chart] },
               ]}
             />
             <AppText style={styles.legendLabel}>
-              {STATUS_LABELS[segment.status]}
+              {BUCKETS[segment.bucket].label}
             </AppText>
             <AppText variant="bodyStrong">{segment.count}</AppText>
             <AppText variant="caption" tone="muted" style={styles.share}>

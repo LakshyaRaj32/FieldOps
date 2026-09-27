@@ -1,16 +1,19 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 import { v7 as uuidv7 } from 'uuid';
 
-import { AuthErrors } from '../common/errors/app-exception.js';
+import { AppException, AuthErrors } from '../common/errors/app-exception.js';
+import { ErrorCode } from '../common/errors/error-codes.js';
+import { TenancyErrors } from '../common/tenancy/scope.js';
 import { APP_CONFIG, type AppConfig } from '../config/app-config.js';
 import { DomainEvents } from '../events/domain-events.js';
-import {
-  SessionRevocationReason,
-  type User,
-} from '../generated/prisma/client.js';
+import { SessionRevocationReason } from '../generated/prisma/client.js';
 import { UserProfileDto } from '../users/dto/user-profile.dto.js';
-import { UsersService } from '../users/users.service.js';
+import {
+  UsersService,
+  type UserWithOrganization,
+} from '../users/users.service.js';
 import type { AuthResultDto, AuthTokensDto } from './dto/auth-response.dto.js';
+import type { ChangePasswordDto } from './dto/change-password.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { RegisterDto } from './dto/register.dto.js';
 import { PasswordService } from './password.service.js';
@@ -40,7 +43,11 @@ export class AuthService {
     private readonly events: DomainEvents,
   ) {}
 
-  /** Creates a WORKER account and signs it in on the calling device. */
+  /**
+   * Creates a WORKER account outside every organization and signs it in on the calling
+   * device. It has no business data until an organization adds it; administrators create
+   * member accounts directly (POST /organization/members).
+   */
   async register(
     dto: RegisterDto,
     client: ClientContext,
@@ -69,6 +76,9 @@ export class AuthService {
     // Revealed only after a correct password, so it does not help enumerate accounts.
     if (!user.isActive) {
       throw AuthErrors.accountDisabled();
+    }
+    if (user.organization?.status === 'SUSPENDED') {
+      throw TenancyErrors.organizationSuspended();
     }
 
     if (this.passwords.needsRehash(user.passwordHash)) {
@@ -112,6 +122,9 @@ export class AuthService {
     }
     if (!session.user.isActive) {
       throw AuthErrors.accountDisabled();
+    }
+    if (session.user.organization?.status === 'SUSPENDED') {
+      throw TenancyErrors.organizationSuspended();
     }
 
     if (
@@ -169,6 +182,58 @@ export class AuthService {
     );
   }
 
+  /**
+   * Changes the signed-in user's password. The current password must be given (a stolen
+   * unlocked phone is not enough), and every other session is signed out.
+   */
+  async changePassword(
+    userId: string,
+    sessionId: string,
+    dto: ChangePasswordDto,
+  ): Promise<void> {
+    const user = await this.users.findById(userId);
+    if (
+      user === null ||
+      !(await this.passwords.verify(user.passwordHash, dto.currentPassword))
+    ) {
+      // 422, not 401: the session is fine, only the confirmation was wrong.
+      throw new AppException(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        ErrorCode.INVALID_CREDENTIALS,
+        'Current password is incorrect.',
+        [
+          {
+            field: 'currentPassword',
+            message: 'Current password is incorrect.',
+          },
+        ],
+      );
+    }
+    await this.users.updatePasswordHash(
+      userId,
+      await this.passwords.hash(dto.newPassword),
+      {
+        organizationId: user.organizationId,
+        actorId: userId,
+        action: 'member.password_changed',
+        entityType: 'user',
+        entityId: userId,
+        summary: 'Password changed',
+      },
+    );
+    const revoked = await this.sessions.revokeOthers(
+      userId,
+      sessionId,
+      SessionRevocationReason.LOGOUT_ALL,
+    );
+    for (const id of revoked) {
+      this.events.publish({ type: 'session.ended', sessionId: id });
+    }
+    this.logger.log(
+      `Password changed; ${revoked.length} other session(s) signed out (userId=${userId})`,
+    );
+  }
+
   async me(userId: string): Promise<UserProfileDto> {
     const user = await this.users.findById(userId);
     if (user === null) {
@@ -180,7 +245,7 @@ export class AuthService {
   }
 
   private async startSession(
-    user: User,
+    user: UserWithOrganization,
     client: ClientContext,
   ): Promise<AuthResultDto> {
     const now = new Date();

@@ -105,4 +105,42 @@ export const JOB_MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  {
+    version: 3,
+    description: 'operations: the field lifecycle commands',
+    statements: [
+      // As in v2, the outbox is rebuilt for the new command types with its rows unchanged.
+      // (Jobs stored before operations lack their new fields; localJobStore fills them in
+      // when reading, and the next sync stores the server's.) The catalog an order
+      // collection needs offline lives in sync_state, so it needs no table.
+      `CREATE TABLE outbox_v3 (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        mutation_id TEXT NOT NULL UNIQUE,
+        type TEXT NOT NULL CHECK (type IN (
+          'job.accept', 'job.decline', 'job.depart', 'job.arrive', 'job.start',
+          'job.complete', 'job.submit', 'job.fail', 'job.note.add', 'job.evidence.add',
+          'job.message.send'
+        )),
+        job_id TEXT NOT NULL,
+        job_title TEXT NOT NULL,
+        payload TEXT,
+        base_version INTEGER NOT NULL,
+        occurred_at TEXT NOT NULL,
+        status TEXT NOT NULL
+          CHECK (status IN ('pending', 'in_flight', 'synced', 'failed', 'conflict')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT,
+        last_attempt_at TEXT,
+        last_error_code TEXT,
+        last_error_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+      'INSERT INTO outbox_v3 SELECT * FROM outbox',
+      'DROP TABLE outbox',
+      'ALTER TABLE outbox_v3 RENAME TO outbox',
+      'CREATE INDEX outbox_status_seq_idx ON outbox (status, seq)',
+      'CREATE INDEX outbox_job_id_seq_idx ON outbox (job_id, seq)',
+    ],
+  },
 ];

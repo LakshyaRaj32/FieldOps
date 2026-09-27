@@ -83,8 +83,38 @@ export async function createTestApp(
 /** Empties every table between tests. */
 export async function resetDatabase(prisma: PrismaService): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE notifications, push_devices, job_messages, job_evidence, processed_mutations, job_notes, job_events, job_checklist_items, jobs, sessions, users CASCADE',
+    'TRUNCATE TABLE audit_logs, notifications, push_devices, payments, job_lines, job_messages, job_evidence, processed_mutations, job_notes, job_events, job_checklist_items, jobs, order_items, orders, products, shop_assignments, shops, team_memberships, sessions, users, organizations CASCADE',
   );
+}
+
+/** The organization the Phase 2-4 suites run in (they predate multi-tenancy). */
+export const TEST_ORGANIZATION = 'Test organization';
+
+/**
+ * Puts a (self-registered) user into an organization with a role, the way an organization
+ * admin would, creating the organization on first use. Returns the organization's ID.
+ */
+export async function joinOrganization(
+  prisma: PrismaService,
+  userId: string,
+  role: 'WORKER' | 'MANAGER' | 'ORGANIZATION_ADMIN',
+  organizationName: string = TEST_ORGANIZATION,
+  options: { readonly organizationWideAccess?: boolean } = {},
+): Promise<string> {
+  const organization = await prisma.organization.upsert({
+    where: { name: organizationName },
+    create: { name: organizationName },
+    update: {},
+  });
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      role,
+      organizationId: organization.id,
+      organizationWideAccess: options.organizationWideAccess ?? false,
+    },
+  });
+  return organization.id;
 }
 
 /** Waits until `check` passes (event handlers run after the response is sent). */

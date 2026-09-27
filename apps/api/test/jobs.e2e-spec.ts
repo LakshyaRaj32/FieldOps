@@ -8,9 +8,12 @@ import type {
 
 import {
   createTestApp,
+  joinOrganization,
   resetDatabase,
   type TestApp,
 } from './helpers/test-app.js';
+
+type JoinRole = Parameters<typeof joinOrganization>[2];
 
 const PASSWORD = 'correct horse battery staple';
 
@@ -47,7 +50,7 @@ describe('Jobs (e2e)', () => {
     await t.app.close();
   });
 
-  /** Registers a user (always WORKER), then grants the role directly in the database. */
+  /** Registers a user (an unaffiliated WORKER), then adds them to the test organization. */
   async function signUp(name: string, role: Role): Promise<Actor> {
     const response = await t
       .http()
@@ -60,17 +63,18 @@ describe('Jobs (e2e)', () => {
       });
     expect(response.status).toBe(201);
     const { user, tokens } = (response.body as { data: AuthResult }).data;
-    if (role !== 'WORKER') {
-      // The API reads the role from the database on every request.
-      await t.prisma.user.update({ where: { id: user.id }, data: { role } });
-    }
+    // The API reads the role and organization from the database on every request.
+    // Phase 2-4 semantics: one manager runs the whole organization.
+    await joinOrganization(t.prisma, user.id, role as JoinRole, undefined, {
+      organizationWideAccess: role === 'MANAGER',
+    });
     return { id: user.id, token: tokens.accessToken };
   }
 
   beforeEach(async () => {
     await resetDatabase(t.prisma);
     manager = await signUp('manager', 'MANAGER');
-    admin = await signUp('admin', 'ADMIN');
+    admin = await signUp('admin', 'ORGANIZATION_ADMIN');
     workerA = await signUp('worker-a', 'WORKER');
     workerB = await signUp('worker-b', 'WORKER');
   });
@@ -130,7 +134,12 @@ describe('Jobs (e2e)', () => {
 
       const myJobs = dataOf<JobPage>(await get(workerA, '/jobs'));
       expect(myJobs.items.map(job => job.id)).toEqual([created.id]);
-      expect(myJobs.items[0]?.allowedActions).toEqual(['start', 'note', 'evidence', 'message']);
+      expect(myJobs.items[0]?.allowedActions).toEqual([
+        'start',
+        'note',
+        'evidence',
+        'message',
+      ]);
 
       const details = dataOf<JobDetail>(
         await get(workerA, `/jobs/${created.id}`),
@@ -193,7 +202,14 @@ describe('Jobs (e2e)', () => {
           notes: 'Ask for Mr. Rao at reception.',
           createdBy: { id: manager.id, firstName: 'manager' },
           version: 1,
-          allowedActions: ['message', 'assign', 'edit', 'cancel', 'delete'],
+          allowedActions: [
+            'message',
+            'assign',
+            'reschedule',
+            'edit',
+            'cancel',
+            'delete',
+          ],
           history: [{ type: 'CREATED', fromStatus: null, toStatus: 'PENDING' }],
         },
       });
@@ -294,7 +310,7 @@ describe('Jobs (e2e)', () => {
       expect(dataOf<JobDetail>(response)).toMatchObject({
         status: 'ASSIGNED',
         assignedWorker: { id: workerA.id, firstName: 'worker-a' },
-        allowedActions: ['message', 'assign', 'edit', 'cancel'],
+        allowedActions: ['message', 'assign', 'reschedule', 'edit', 'cancel'],
       });
     });
 

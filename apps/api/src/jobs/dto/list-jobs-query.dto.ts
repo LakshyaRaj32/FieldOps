@@ -12,7 +12,7 @@ import {
   Min,
 } from 'class-validator';
 
-import { JobStatus } from '../job-enums.js';
+import { JobStatus, JobType } from '../job-enums.js';
 
 export class ListJobsQueryDto {
   @ApiPropertyOptional({
@@ -42,9 +42,41 @@ export class ListJobsQueryDto {
   readonly status?: JobStatus[];
 
   @ApiPropertyOptional({
+    description:
+      'Comma-separated operation types, for example `DELIVERY,PAYMENT_COLLECTION`.',
+    type: String,
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    const parts = (Array.isArray(value) ? value : [value]).flatMap(
+      (part: unknown) =>
+        typeof part === 'string'
+          ? part
+              .split(',')
+              .map(type => type.trim())
+              .filter(type => type !== '')
+          : [part],
+    );
+    return parts.length === 0 ? undefined : parts;
+  })
+  @IsEnum(JobType, {
+    each: true,
+    message: `Type must be one of ${Object.values(JobType).join(', ')}.`,
+  })
+  readonly type?: JobType[];
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Staff: only operations at this shop.',
+  })
+  @IsOptional()
+  @IsUUID('all', { message: 'Shop ID must be a UUID.' })
+  readonly shopId?: string;
+
+  @ApiPropertyOptional({
     format: 'uuid',
     description:
-      'Managers and admins: only jobs assigned to this worker. Workers always get their own jobs.',
+      'Staff: only jobs assigned to this worker. Workers always get their own jobs.',
   })
   @IsOptional()
   @IsUUID('all', { message: 'Worker ID must be a UUID.' })

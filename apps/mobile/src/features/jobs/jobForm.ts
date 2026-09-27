@@ -1,6 +1,8 @@
+import { parseMoney } from '@fieldops/shared/money';
 import {
   JobPriority,
   JobStatus,
+  JobType,
   type CreateJobRequest,
   type JobDetail,
   type UpdateJobRequest,
@@ -9,8 +11,13 @@ import {
 import type { FieldErrors } from '../auth/validation';
 
 /**
- * The manager's job form: field values as typed, client-side checks that mirror the API's
+ * The staff's operation form: field values as typed, client-side checks that mirror the API's
  * rules (the server stays the authority) and conversion to API requests. Pure functions.
+ *
+ * A GENERAL job takes a customer and address. Every other type takes a shop (its name,
+ * address and coordinates are the shop's); deliveries and payment collections an order of
+ * that shop, a collection the amount to collect, an inventory check the products to count
+ * and a shop visit a checklist (the same rules the server applies).
  *
  * The schedule is chosen with the native date and time pickers (components/common/
  * DateTimeField) and kept here as a date (YYYY-MM-DD) and a 24-hour time (HH:MM) in the
@@ -29,6 +36,14 @@ export const LIMITS = {
 } as const;
 
 export interface JobForm {
+  readonly type: JobType;
+  readonly shopId: string;
+  readonly orderId: string;
+  /** PAYMENT_COLLECTION: as typed ("2,00,000"); parsed to minor units on submit. */
+  readonly expectedAmount: string;
+  /** INVENTORY_CHECK: the products to count. */
+  readonly productIds: readonly string[];
+  readonly requiresPhoto: boolean;
   readonly title: string;
   readonly customerName: string;
   readonly address: string;
@@ -44,6 +59,12 @@ export interface JobForm {
 }
 
 export type JobFormErrors = FieldErrors<keyof JobForm>;
+
+/** Operation types that need an order of the shop. */
+export const ORDER_TYPES: readonly JobType[] = [
+  JobType.DELIVERY,
+  JobType.PAYMENT_COLLECTION,
+];
 
 const pad = (value: number) => String(value).padStart(2, '0');
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -64,6 +85,12 @@ export function emptyJobForm(now: Date = new Date()): JobForm {
   const next = new Date(now);
   next.setHours(now.getHours() + 1, 0, 0, 0);
   return {
+    type: JobType.GENERAL,
+    shopId: '',
+    orderId: '',
+    expectedAmount: '',
+    productIds: [],
+    requiresPhoto: false,
     title: '',
     customerName: '',
     address: '',
@@ -80,6 +107,12 @@ export function emptyJobForm(now: Date = new Date()): JobForm {
 export function jobToForm(job: JobDetail): JobForm {
   const scheduled = new Date(job.scheduledAt);
   return {
+    type: job.type,
+    shopId: job.shop?.id ?? '',
+    orderId: job.order?.id ?? '',
+    expectedAmount: '',
+    productIds: job.lines.map(line => line.productId),
+    requiresPhoto: job.requiresPhoto,
     title: job.title,
     customerName: job.customerName,
     address: job.address,
@@ -144,14 +177,38 @@ function optional(
     : undefined;
 }
 
-export function validateJobForm(form: JobForm): JobFormErrors {
+export function validateJobForm(
+  form: JobForm,
+  currency = 'INR',
+): JobFormErrors {
+  const general = form.type === JobType.GENERAL;
   const errors: Partial<Record<keyof JobForm, string | undefined>> = {
     title: required(form.title, 'Title', LIMITS.title),
-    customerName: required(form.customerName, 'Customer', LIMITS.customerName),
-    address: required(form.address, 'Address', LIMITS.address),
     description: optional(form.description, 'Description', LIMITS.description),
     notes: optional(form.notes, 'Notes', LIMITS.notes),
   };
+  if (general) {
+    errors.customerName = required(
+      form.customerName,
+      'Customer',
+      LIMITS.customerName,
+    );
+    errors.address = required(form.address, 'Address', LIMITS.address);
+  } else if (form.shopId === '') {
+    errors.shopId = 'Choose the shop.';
+  }
+  if (ORDER_TYPES.includes(form.type) && form.orderId === '') {
+    errors.orderId = 'Choose the order.';
+  }
+  if (form.type === JobType.PAYMENT_COLLECTION) {
+    const amount = parseMoney(form.expectedAmount, currency);
+    if (amount === undefined || amount < 1) {
+      errors.expectedAmount = 'Enter the amount to collect.';
+    }
+  }
+  if (form.type === JobType.INVENTORY_CHECK && form.productIds.length === 0) {
+    errors.productIds = 'Choose at least one product to count.';
+  }
 
   if (!DATE.test(form.date.trim())) {
     errors.date = 'Use the format YYYY-MM-DD.';
@@ -162,7 +219,9 @@ export function validateJobForm(form: JobForm): JobFormErrors {
   }
 
   const items = parseChecklist(form.checklist);
-  if (items.length > LIMITS.checklistItems) {
+  if (form.type === JobType.SHOP_VISIT && items.length === 0) {
+    errors.checklist = 'A shop visit needs a checklist: one item per line.';
+  } else if (items.length > LIMITS.checklistItems) {
     errors.checklist = `Use at most ${LIMITS.checklistItems} items.`;
   } else if (items.some(item => item.length > LIMITS.checklistItem)) {
     errors.checklist = `Each item must be at most ${LIMITS.checklistItem} characters.`;
@@ -181,7 +240,10 @@ export function validateJobForm(form: JobForm): JobFormErrors {
 }
 
 /** Call after validateJobForm reported no errors. */
-export function toCreateJobRequest(form: JobForm): CreateJobRequest {
+export function toCreateJobRequest(
+  form: JobForm,
+  currency = 'INR',
+): CreateJobRequest {
   const scheduledAt = parseSchedule(form.date, form.time);
   if (scheduledAt === undefined) {
     throw new Error('toCreateJobRequest called with an invalid schedule');
@@ -189,10 +251,23 @@ export function toCreateJobRequest(form: JobForm): CreateJobRequest {
   const description = form.description.trim();
   const notes = form.notes.trim();
   const checklist = parseChecklist(form.checklist);
+  const general = form.type === JobType.GENERAL;
+  const amount = parseMoney(form.expectedAmount, currency);
   return {
+    // A GENERAL job's request is exactly the Phase 2 one (the type is the default).
+    ...(!general && { type: form.type, shopId: form.shopId }),
+    ...(ORDER_TYPES.includes(form.type) && { orderId: form.orderId }),
+    ...(form.type === JobType.PAYMENT_COLLECTION &&
+      amount !== undefined && { expectedAmount: amount }),
+    ...(form.type === JobType.INVENTORY_CHECK && {
+      productIds: [...form.productIds],
+    }),
+    ...(form.requiresPhoto && { requiresPhoto: true }),
     title: form.title.trim(),
-    customerName: form.customerName.trim(),
-    address: form.address.trim(),
+    ...(general && {
+      customerName: form.customerName.trim(),
+      address: form.address.trim(),
+    }),
     scheduledAt: scheduledAt.toISOString(),
     priority: form.priority,
     ...(description !== '' && { description }),
@@ -222,13 +297,20 @@ export function toUpdateJobRequest(
     canEditChecklist(job.status) &&
     checklist.join('\n') !== (original.checklist ?? []).join('\n');
 
+  const general = job.type === JobType.GENERAL;
   return {
     version: job.version,
     ...(changed('title') && { title: request.title }),
-    ...(changed('customerName') && { customerName: request.customerName }),
-    ...(changed('address') && { address: request.address }),
+    // Shop operations take the shop's name and address: never sent.
+    ...(general &&
+      changed('customerName') && { customerName: request.customerName }),
+    ...(general && changed('address') && { address: request.address }),
     // Compared through the form, so seconds the form cannot show don't count as a change.
-    ...(changed('scheduledAt') && { scheduledAt: request.scheduledAt }),
+    // After assignment a shop operation is rescheduled instead (the worker is told).
+    ...(changed('scheduledAt') &&
+      (general || job.status === JobStatus.PENDING) && {
+        scheduledAt: request.scheduledAt,
+      }),
     ...(changed('priority') && { priority: request.priority }),
     ...(description !== job.description && { description }),
     ...(notes !== job.notes && { notes }),

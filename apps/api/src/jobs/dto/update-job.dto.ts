@@ -17,7 +17,8 @@ import {
 /**
  * Partial update of manager-owned fields. Leave a field out to keep it; `null` clears the
  * optional ones (description, location, notes). Status is not a field here: it changes only
- * through the action endpoints.
+ * through the action endpoints. The customer, address and location exist on GENERAL jobs
+ * only (shop operations use the shop's); type, shop, order and amount never change.
  */
 export class UpdateJobDto implements UpdateJobRequest {
   @ApiProperty({

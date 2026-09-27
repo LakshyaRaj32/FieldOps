@@ -24,21 +24,24 @@ export function createApiTransport(
     return { data };
   };
 
+  const endpoints = {
+    accept: jobsApi.endpoints.acceptJob,
+    decline: jobsApi.endpoints.declineJob,
+    depart: jobsApi.endpoints.departJob,
+    arrive: jobsApi.endpoints.arriveJob,
+    start: jobsApi.endpoints.startJob,
+    complete: jobsApi.endpoints.completeJob,
+    submit: jobsApi.endpoints.submitJob,
+    fail: jobsApi.endpoints.failJob,
+  } as const;
+
   return {
-    startJob: (id, idempotencyKey, request) =>
+    workerCommand: (action, id, idempotencyKey, body) =>
       settle(
         dispatch(
-          jobsApi.endpoints.startJob.initiate(
-            { id, idempotencyKey, request },
-            { track: false },
-          ),
-        ),
-      ),
-    completeJob: (id, idempotencyKey, request) =>
-      settle(
-        dispatch(
-          jobsApi.endpoints.completeJob.initiate(
-            { id, idempotencyKey, request },
+          // Every endpoint takes the same arguments; the body type is the action's.
+          (endpoints[action] as typeof jobsApi.endpoints.startJob).initiate(
+            { id, idempotencyKey, request: body },
             { track: false },
           ),
         ),

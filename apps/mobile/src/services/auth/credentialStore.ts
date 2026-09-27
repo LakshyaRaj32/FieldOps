@@ -5,7 +5,7 @@ import {
   secureSessionStorage,
   type SecureValueStore,
 } from '../storage/secureStorage';
-import { isAuthTokens, isUserProfile } from './contracts';
+import { isAuthTokens, isUserProfile, upgradeStoredProfile } from './contracts';
 
 /** What is persisted for a signed-in session. */
 export interface StoredSession {
@@ -40,7 +40,10 @@ function parseStoredSession(raw: string): StoredSession | undefined {
     if (typeof value !== 'object' || value === null) {
       return undefined;
     }
-    const { tokens, user } = value as Record<string, unknown>;
+    const { tokens } = value as Record<string, unknown>;
+    const user = upgradeStoredProfile(
+      (value as Record<string, unknown>)['user'],
+    );
     return isAuthTokens(tokens) && isUserProfile(user)
       ? { tokens, user }
       : undefined;

@@ -41,6 +41,36 @@ export const NOTIFICATION_KINDS: Readonly<
     readIcon: 'chatbubble-ellipses-outline',
     tone: 'info',
   },
+  [NotificationType.JOB_RESCHEDULED]: {
+    unreadIcon: 'calendar',
+    readIcon: 'calendar-outline',
+    tone: 'info',
+  },
+  [NotificationType.JOB_DECLINED]: {
+    unreadIcon: 'return-down-back',
+    readIcon: 'return-down-back-outline',
+    tone: 'warning',
+  },
+  [NotificationType.JOB_SUBMITTED]: {
+    unreadIcon: 'shield-checkmark',
+    readIcon: 'shield-checkmark-outline',
+    tone: 'warning',
+  },
+  [NotificationType.JOB_REJECTED]: {
+    unreadIcon: 'arrow-undo',
+    readIcon: 'arrow-undo-outline',
+    tone: 'danger',
+  },
+  [NotificationType.JOB_FAILED]: {
+    unreadIcon: 'alert-circle',
+    readIcon: 'alert-circle-outline',
+    tone: 'danger',
+  },
+  [NotificationType.PAYMENT_OVERDUE]: {
+    unreadIcon: 'wallet',
+    readIcon: 'wallet-outline',
+    tone: 'danger',
+  },
 };
 
 /** "3 unread" / "All caught up", above the list. */

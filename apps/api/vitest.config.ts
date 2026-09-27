@@ -16,6 +16,21 @@ export const sharedSourceAliases = [
       new URL('../../packages/shared/src/geo.ts', import.meta.url),
     ),
   },
+  {
+    find: /^@fieldops\/shared\/requirements$/,
+    replacement: fileURLToPath(
+      new URL(
+        '../../packages/shared/src/operation-requirements.ts',
+        import.meta.url,
+      ),
+    ),
+  },
+  {
+    find: /^@fieldops\/shared\/money$/,
+    replacement: fileURLToPath(
+      new URL('../../packages/shared/src/money.ts', import.meta.url),
+    ),
+  },
 ];
 
 /** Unit tests: next to the code (src/**\/*.spec.ts). No database, no network. */

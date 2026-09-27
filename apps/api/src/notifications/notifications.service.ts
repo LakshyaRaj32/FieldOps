@@ -18,6 +18,7 @@ import {
 import {
   planForJobChange,
   planForMessage,
+  planForOverdue,
   pushText,
   type PlannedNotification,
 } from './domain/notification-plan.js';
@@ -60,6 +61,9 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
       this.events.subscribe('job.message.created', event =>
         this.deliver(planForMessage(event)),
       ),
+      this.events.subscribe('payment.overdue', event =>
+        this.deliver(planForOverdue(event)),
+      ),
       this.events.subscribe('session.ended', event =>
         this.notifications.removeDeviceOfSession(event.sessionId),
       ),
@@ -88,7 +92,8 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
           ...pushText(notification.type),
           data: {
             type: notification.type,
-            jobId: notification.jobId,
+            jobId: notification.jobId ?? '',
+            shopId: notification.shopId ?? '',
             notificationId: notification.id,
           },
         });

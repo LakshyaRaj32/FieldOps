@@ -47,9 +47,9 @@ describe('parseAppConfig', () => {
       parseAppConfig({ ...VALID, FCM_SERVICE_ACCOUNT_FILE: './fcm.json' })
         .fcmServiceAccountFile,
     ).toBe('./fcm.json');
-    expect(errorOf({ ...VALID, FCM_SERVICE_ACCOUNT_FILE: './fcm.pem' })).toContain(
-      'FCM_SERVICE_ACCOUNT_FILE',
-    );
+    expect(
+      errorOf({ ...VALID, FCM_SERVICE_ACCOUNT_FILE: './fcm.pem' }),
+    ).toContain('FCM_SERVICE_ACCOUNT_FILE');
   });
 
   it('uses the PORT supplied by the platform', () => {

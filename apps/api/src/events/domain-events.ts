@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import type { JobType } from '@fieldops/types';
+
 import type { Role } from '../users/role.js';
 
 /**
@@ -17,21 +19,43 @@ import type { Role } from '../users/role.js';
 export type JobChangeKind =
   | 'assigned'
   | 'updated'
+  | 'accepted'
+  | 'declined'
+  | 'departed'
+  | 'arrived'
   | 'started'
+  | 'submitted'
+  | 'verified'
+  | 'rejected'
   | 'completed'
+  | 'failed'
   | 'cancelled'
+  | 'rescheduled'
   | 'note'
   | 'evidence';
 
 export interface JobChangedEvent {
   readonly type: 'job.changed';
+  readonly organizationId: string;
   readonly jobId: string;
   readonly jobTitle: string;
+  readonly jobType: JobType;
   readonly change: JobChangeKind;
   readonly status: string;
   readonly version: number;
   readonly actorId: string;
+  /** For notification texts ("Rahul submitted..."). */
+  readonly actorName: string;
   readonly createdById: string;
+  /** The responsible manager (told about submissions, failures, declines). */
+  readonly managerId: string;
+  readonly shopId: string | null;
+  readonly shopName: string | null;
+  /** Money involved (a submitted collection), minor units of `currency`. */
+  readonly amount: number | null;
+  readonly currency: string;
+  /** Why (declined, rejected, failed, rescheduled, cancelled). */
+  readonly reason: string | null;
   /** The assignee after the change. */
   readonly assignedWorkerId: string | null;
   /** On reassignment: the worker the job was taken from. */
@@ -40,13 +64,30 @@ export interface JobChangedEvent {
 
 export interface JobMessageCreatedEvent {
   readonly type: 'job.message.created';
+  readonly organizationId: string;
   readonly jobId: string;
   readonly jobTitle: string;
   readonly messageId: string;
   readonly authorId: string;
   readonly authorRole: Role;
   readonly createdById: string;
+  readonly managerId: string;
   readonly assignedWorkerId: string | null;
+}
+
+/** An order passed its due date unpaid (published once per order by the overdue scan). */
+export interface PaymentOverdueEvent {
+  readonly type: 'payment.overdue';
+  readonly organizationId: string;
+  readonly shopId: string;
+  readonly shopName: string;
+  readonly orderId: string;
+  readonly orderNumber: string;
+  /** Minor units of `currency`. */
+  readonly outstanding: number;
+  readonly currency: string;
+  /** Who to tell (decided by the publisher: the shop's managers and the admins). */
+  readonly recipientIds: readonly string[];
 }
 
 /** A session stopped being valid (sign-out, refresh-token reuse). */
@@ -58,6 +99,7 @@ export interface SessionEndedEvent {
 export type DomainEvent =
   | JobChangedEvent
   | JobMessageCreatedEvent
+  | PaymentOverdueEvent
   | SessionEndedEvent;
 
 type EventOf<Type extends DomainEvent['type']> = Extract<

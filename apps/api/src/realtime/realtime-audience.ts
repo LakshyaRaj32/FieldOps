@@ -5,34 +5,41 @@ import type {
   RealtimeEventType,
 } from '@fieldops/types';
 
+import { isOrganizationWide } from '../common/tenancy/scope.js';
 import type { AuthenticatedUser } from '../common/types/authenticated-user.js';
 import type {
   JobChangedEvent,
   JobMessageCreatedEvent,
 } from '../events/domain-events.js';
-import { hasPermission } from '../jobs/domain/job.policy.js';
 
 /**
  * Who receives which realtime event. Pure, so the rules are unit-tested, and derived from the
- * job policy so that a socket never receives a hint about a job its user may not see through
- * REST (docs/realtime.md, "Authorization"):
+ * operation policy so that a socket never receives a hint about an operation its user may
+ * not see through REST (docs/realtime.md, "Authorization"):
  *
  * - every connection joins `user:<id>` and `session:<id>`;
- * - users who may read every job (job:read:all: managers, admins) also join `managers`;
- * - a job's events go to `managers` and to its assigned worker, and nobody else;
- * - a worker a job was taken from gets one `unassigned` hint without the job's status.
+ * - organization-wide staff (organization admins, managers with organization-wide access)
+ *   also join their organization's staff room, `org:<id>:staff`. There is no global room:
+ *   one organization's events never reach another's sockets;
+ * - an operation's events go to its organization's staff room, its responsible manager
+ *   and its assigned worker, and nobody else;
+ * - a worker an operation was taken from (reassigned, or declined) gets one `unassigned`
+ *   hint without the status.
  */
 
-export const MANAGERS_ROOM = 'managers';
 export const userRoom = (userId: string): string => `user:${userId}`;
 export const sessionRoom = (sessionId: string): string =>
   `session:${sessionId}`;
+export const organizationStaffRoom = (organizationId: string): string =>
+  `org:${organizationId}:staff`;
 
 export function roomsFor(user: AuthenticatedUser): string[] {
   return [
     userRoom(user.userId),
     sessionRoom(user.sessionId),
-    ...(hasPermission(user.role, 'job:read:all') ? [MANAGERS_ROOM] : []),
+    ...(user.organizationId !== null && isOrganizationWide(user)
+      ? [organizationStaffRoom(user.organizationId)]
+      : []),
   ];
 }
 
@@ -42,10 +49,17 @@ export interface Delivery<Type extends RealtimeEventType = RealtimeEventType> {
   readonly data: RealtimeEventMap[Type];
 }
 
-function jobAudience(assignedWorkerId: string | null): string[] {
+function jobAudience(event: {
+  readonly organizationId: string;
+  readonly managerId: string;
+  readonly assignedWorkerId: string | null;
+}): string[] {
   return [
-    MANAGERS_ROOM,
-    ...(assignedWorkerId === null ? [] : [userRoom(assignedWorkerId)]),
+    organizationStaffRoom(event.organizationId),
+    userRoom(event.managerId),
+    ...(event.assignedWorkerId === null
+      ? []
+      : [userRoom(event.assignedWorkerId)]),
   ];
 }
 
@@ -59,7 +73,7 @@ export function jobChangedDeliveries(
     version: event.version,
   };
   const deliveries: Delivery<'job.changed'>[] = [
-    { rooms: jobAudience(event.assignedWorkerId), type: 'job.changed', data },
+    { rooms: jobAudience(event), type: 'job.changed', data },
   ];
   if (
     event.previousAssigneeId !== null &&
@@ -81,11 +95,5 @@ export function messageDeliveries(
     jobId: event.jobId,
     messageId: event.messageId,
   };
-  return [
-    {
-      rooms: jobAudience(event.assignedWorkerId),
-      type: 'job.message.created',
-      data,
-    },
-  ];
+  return [{ rooms: jobAudience(event), type: 'job.message.created', data }];
 }

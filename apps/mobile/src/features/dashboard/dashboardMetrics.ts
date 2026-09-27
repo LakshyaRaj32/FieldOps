@@ -1,3 +1,4 @@
+import { OPEN_STATUSES, UNDER_WAY_STATUSES } from '@fieldops/shared';
 import { JobStatus, type JobOverview } from '@fieldops/types';
 
 import type { ChartColors } from '../../theme';
@@ -10,23 +11,34 @@ import type { ChartColors } from '../../theme';
 
 type StatusCounts = JobOverview['statusCounts'];
 
+const sum = (counts: StatusCounts, statuses: readonly JobStatus[]): number =>
+  statuses.reduce((total, status) => total + counts[status], 0);
+
 export function openJobs(counts: StatusCounts): number {
-  return counts.PENDING + counts.ASSIGNED + counts.IN_PROGRESS;
+  return sum(counts, OPEN_STATUSES);
+}
+
+/** Operations a worker is on right now (en route, at the shop, working). */
+export function underWay(counts: StatusCounts): number {
+  return sum(counts, UNDER_WAY_STATUSES);
+}
+
+/** Assigned or accepted, not under way yet. */
+export function waiting(counts: StatusCounts): number {
+  return counts.ASSIGNED + counts.ACCEPTED;
 }
 
 export function totalJobs(counts: StatusCounts): number {
-  return Object.values(JobStatus).reduce(
-    (sum, status) => sum + counts[status],
-    0,
-  );
+  return sum(counts, Object.values(JobStatus));
 }
 
-/** The share of closed jobs that were completed rather than cancelled (0–1), or null. */
+/** The share of closed jobs that were completed rather than cancelled or failed (0–1). */
 export function completionRate(
   completed: number,
   cancelled: number,
+  failed = 0,
 ): number | null {
-  const closed = completed + cancelled;
+  const closed = completed + cancelled + failed;
   return closed === 0 ? null : completed / closed;
 }
 
@@ -35,45 +47,91 @@ export function formatPercent(rate: number | null): string {
   return rate === null ? '–' : `${Math.round(rate * 100)}%`;
 }
 
-/** Order of the status breakdown: the job's life from left to right. */
-export const STATUS_ORDER: readonly JobStatus[] = [
-  JobStatus.PENDING,
-  JobStatus.ASSIGNED,
-  JobStatus.IN_PROGRESS,
-  JobStatus.COMPLETED,
-  JobStatus.CANCELLED,
+/**
+ * The status breakdown groups the ten statuses into the six stages a manager acts on, in
+ * life-cycle order, so the bar stays readable.
+ */
+export type StatusBucket =
+  | 'unassigned'
+  | 'waiting'
+  | 'underWay'
+  | 'awaitingVerification'
+  | 'completed'
+  | 'closedOtherwise';
+
+export const BUCKETS: Readonly<
+  Record<
+    StatusBucket,
+    {
+      readonly label: string;
+      readonly statuses: readonly JobStatus[];
+      readonly chart: keyof ChartColors;
+    }
+  >
+> = {
+  unassigned: {
+    label: 'Unassigned',
+    statuses: [JobStatus.PENDING],
+    chart: 'pending',
+  },
+  waiting: {
+    label: 'Assigned',
+    statuses: [JobStatus.ASSIGNED, JobStatus.ACCEPTED],
+    chart: 'assigned',
+  },
+  underWay: {
+    label: 'Under way',
+    statuses: UNDER_WAY_STATUSES,
+    chart: 'inProgress',
+  },
+  awaitingVerification: {
+    label: 'To verify',
+    statuses: [JobStatus.SUBMITTED],
+    chart: 'submitted',
+  },
+  completed: {
+    label: 'Completed',
+    statuses: [JobStatus.COMPLETED],
+    chart: 'completed',
+  },
+  closedOtherwise: {
+    label: 'Cancelled or failed',
+    statuses: [JobStatus.CANCELLED, JobStatus.FAILED],
+    chart: 'cancelled',
+  },
+};
+
+export const BUCKET_ORDER: readonly StatusBucket[] = [
+  'unassigned',
+  'waiting',
+  'underWay',
+  'awaitingVerification',
+  'completed',
+  'closedOtherwise',
 ];
 
-export const STATUS_CHART_KEYS: Readonly<Record<JobStatus, keyof ChartColors>> =
-  {
-    PENDING: 'pending',
-    ASSIGNED: 'assigned',
-    IN_PROGRESS: 'inProgress',
-    COMPLETED: 'completed',
-    CANCELLED: 'cancelled',
-  };
-
 export interface StatusSegment {
-  readonly status: JobStatus;
+  readonly bucket: StatusBucket;
   readonly count: number;
   /** 0–1 of all jobs. */
   readonly share: number;
 }
 
-/** One segment per status, in life-cycle order (zero-count statuses have share 0). */
+/** One segment per stage, in life-cycle order (empty stages have share 0). */
 export function statusSegments(counts: StatusCounts): StatusSegment[] {
   const total = totalJobs(counts);
-  return STATUS_ORDER.map(status => ({
-    status,
-    count: counts[status],
-    share: total === 0 ? 0 : counts[status] / total,
-  }));
+  return BUCKET_ORDER.map(bucket => {
+    const count = sum(counts, BUCKETS[bucket].statuses);
+    return { bucket, count, share: total === 0 ? 0 : count / total };
+  });
 }
 
 /** A worker's own figures, from the jobs on their phone (works offline). */
 export interface WorkerFigures {
   readonly open: number;
   readonly inProgress: number;
+  /** Submitted, waiting for the manager. */
+  readonly awaitingVerification: number;
   /** Completed jobs still on the phone (the working set keeps the last 7 days). */
   readonly completedRecently: number;
 }
@@ -84,8 +142,12 @@ export function workerFigures(
 ): WorkerFigures {
   return {
     open: active.length,
-    inProgress: active.filter(item => item.job.status === JobStatus.IN_PROGRESS)
-      .length,
+    inProgress: active.filter(item =>
+      UNDER_WAY_STATUSES.includes(item.job.status),
+    ).length,
+    awaitingVerification: active.filter(
+      item => item.job.status === JobStatus.SUBMITTED,
+    ).length,
     completedRecently: closed.filter(
       item => item.job.status === JobStatus.COMPLETED,
     ).length,

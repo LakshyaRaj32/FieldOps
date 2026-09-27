@@ -45,10 +45,16 @@ import {
   AddJobNoteDto,
   AssignJobDto,
   CancelJobDto,
+  DeclineJobDto,
+  FailJobDto,
   JobCommandDto,
   JobEvidenceParamDto,
   JobIdParamDto,
+  RejectJobDto,
+  RescheduleJobDto,
   SendJobMessageDto,
+  SubmitJobDto,
+  VerifyJobDto,
 } from './dto/job-command.dto.js';
 import {
   JobDetailDto,
@@ -79,7 +85,12 @@ const FORBIDDEN = {
 const NOT_FOUND = {
   status: HttpStatus.NOT_FOUND,
   description:
-    'NOT_FOUND: no such job, or not one the caller may see (a worker sees only their own).',
+    'NOT_FOUND: no such job, or not one the caller may see (another organization, another team, or a worker who is not assigned).',
+};
+const REQUIREMENTS = {
+  status: HttpStatus.UNPROCESSABLE_ENTITY,
+  description:
+    'REQUIREMENTS_NOT_MET (details list what is missing), AMOUNT_EXCEEDS_BALANCE, INVALID_REFERENCE.',
 };
 /** Documents the header offline clients send with every command (see api.md, "Offline sync"). */
 const IdempotencyKeyHeader = () =>
@@ -102,8 +113,8 @@ const WRONG_STATUS = {
  * exist) lives in JobsService and the domain policy. Route gates below come from the same
  * permission table the service checks, so they cannot disagree.
  *
- * Status never changes through PATCH: it moves only through the action endpoints
- * (assign, start, complete, cancel), each validated by the job state machine.
+ * Status never changes through PATCH: it moves only through the action endpoints, each
+ * validated by the state machine of the operation's type (@fieldops/shared).
  */
 @ApiTags('jobs')
 @ApiBearerAuth()
@@ -115,15 +126,19 @@ export class JobsController {
   @Roles(...rolesWith('job:create'))
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
-    summary: 'Create a job (MANAGER, ADMIN)',
+    summary: 'Create an operation (MANAGER, ORGANIZATION_ADMIN)',
     description:
-      'The job starts PENDING. Assign a worker with POST /jobs/{id}/assign.',
+      'It starts PENDING; assign a worker with POST /jobs/{id}/assign. GENERAL jobs take a ' +
+      'customer and address; every other type a shop in the caller scope, deliveries ' +
+      'and payment collections an open order of that shop (a collection also the amount, ' +
+      'at most what is left to collect), inventory checks the products to count, shop ' +
+      'visits a checklist.',
   })
   @ApiEnvelopeResponse(JobDetailDto, {
     status: HttpStatus.CREATED,
     description: 'The created job.',
   })
-  @ApiErrorResponses(INVALID, UNAUTHENTICATED, FORBIDDEN)
+  @ApiErrorResponses(INVALID, UNAUTHENTICATED, FORBIDDEN, REQUIREMENTS)
   create(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateJobDto,
@@ -135,8 +150,9 @@ export class JobsController {
   @ApiOperation({
     summary: 'List jobs',
     description:
-      'Managers and admins see every job; workers see only jobs assigned to them. ' +
-      'Ordered by scheduled time, then creation. Cursor-paginated.',
+      'Organization admins (and managers with organization-wide access) see every ' +
+      'operation of their organization, other managers the ones they are responsible for, ' +
+      'workers only those assigned to them. Ordered by due time. Cursor-paginated.',
   })
   @ApiEnvelopeResponse(JobPageDto, { description: 'One page of jobs.' })
   @ApiErrorResponses(INVALID, UNAUTHENTICATED, {
@@ -154,11 +170,12 @@ export class JobsController {
   @Get('overview')
   @Roles(...rolesWith('job:read:all'))
   @ApiOperation({
-    summary: 'Dashboard figures across all jobs (MANAGER, ADMIN)',
+    summary: 'Dashboard figures in my scope (MANAGER, ORGANIZATION_ADMIN)',
     description:
-      'Counts by status, overdue and due-soon open jobs, jobs closed in the last 7 days, ' +
-      'open jobs per worker and the latest job history entries. Time windows are rolling ' +
-      '(from `generatedAt`), so the figures need no time zone.',
+      'Operations by status, overdue and due soon, awaiting verification, closed in the ' +
+      'last 7 days; the team (busy, available, online); money (outstanding, due today, ' +
+      'overdue, collected today, pending verification); shops (visited today, pending ' +
+      'visits); workload and activity. Money and visits use the organization calendar day.',
   })
   @ApiEnvelopeResponse(JobOverviewDto, { description: 'The figures.' })
   @ApiErrorResponses(UNAUTHENTICATED, FORBIDDEN)
@@ -198,7 +215,7 @@ export class JobsController {
   @Patch(':id')
   @Roles(...rolesWith('job:edit'))
   @ApiOperation({
-    summary: 'Edit job details (MANAGER, ADMIN)',
+    summary: 'Edit job details (MANAGER, ORGANIZATION_ADMIN)',
     description:
       'Partial update with optimistic concurrency: send the `version` you read. ' +
       'Completed and cancelled jobs are read-only; the checklist is fixed once started.',
@@ -221,7 +238,7 @@ export class JobsController {
   @Roles(...rolesWith('job:delete'))
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
-    summary: 'Delete a pending job (MANAGER, ADMIN)',
+    summary: 'Delete a pending job (MANAGER, ORGANIZATION_ADMIN)',
     description:
       'Only never-assigned (PENDING) jobs can be deleted; cancel any other job instead.',
   })
@@ -241,7 +258,7 @@ export class JobsController {
   @Roles(...rolesWith('job:assign'))
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Assign or reassign a worker (MANAGER, ADMIN)',
+    summary: 'Assign or reassign a worker (MANAGER, ORGANIZATION_ADMIN)',
     description:
       'PENDING or ASSIGNED jobs only. Assigning the current assignee again is a no-op.',
   })
@@ -265,14 +282,263 @@ export class JobsController {
     return this.jobs.assign(user, params.id, dto.workerId);
   }
 
+  @Post(':id/accept')
+  @Roles(...rolesWith('job:work'))
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Accept an assigned operation (the assigned WORKER)',
+    description: 'ASSIGNED → ACCEPTED. Repeating it succeeds without changes.',
+  })
+  @ApiEnvelopeResponse(JobDetailDto, { description: 'The job, now ACCEPTED.' })
+  @IdempotencyKeyHeader()
+  @ApiErrorResponses(
+    INVALID,
+    UNAUTHENTICATED,
+    FORBIDDEN,
+    NOT_FOUND,
+    WRONG_STATUS,
+  )
+  accept(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param() params: JobIdParamDto,
+    @IdempotencyKey() idempotencyKey: string | undefined,
+  ): Promise<JobDetailDto> {
+    return this.jobs.accept(user, params.id, idempotencyKey);
+  }
+
+  @Post(':id/decline')
+  @Roles(...rolesWith('job:work'))
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Hand an operation back (the assigned WORKER)',
+    description:
+      'ASSIGNED or ACCEPTED → PENDING, with a reason; the responsible manager is told. ' +
+      'The operation leaves the worker afterwards.',
+  })
+  @ApiEnvelopeResponse(JobDetailDto, { description: 'The job, now PENDING.' })
+  @IdempotencyKeyHeader()
+  @ApiErrorResponses(
+    INVALID,
+    UNAUTHENTICATED,
+    FORBIDDEN,
+    NOT_FOUND,
+    WRONG_STATUS,
+  )
+  decline(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param() params: JobIdParamDto,
+    @Body() dto: DeclineJobDto,
+    @IdempotencyKey() idempotencyKey: string | undefined,
+  ): Promise<JobDetailDto> {
+    return this.jobs.decline(user, params.id, dto.reason, idempotencyKey);
+  }
+
+  @Post(':id/depart')
+  @Roles(...rolesWith('job:work'))
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Set off for the shop (the assigned WORKER)',
+    description: 'ACCEPTED → EN_ROUTE, optionally with the position.',
+  })
+  @ApiEnvelopeResponse(JobDetailDto, { description: 'The job, now EN_ROUTE.' })
+  @IdempotencyKeyHeader()
+  @ApiErrorResponses(
+    INVALID,
+    UNAUTHENTICATED,
+    FORBIDDEN,
+    NOT_FOUND,
+    WRONG_STATUS,
+  )
+  depart(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param() params: JobIdParamDto,
+    @Body() dto: JobCommandDto,
+    @IdempotencyKey() idempotencyKey: string | undefined,
+  ): Promise<JobDetailDto> {
+    return this.jobs.depart(user, params.id, idempotencyKey, dto.location);
+  }
+
+  @Post(':id/arrive')
+  @Roles(...rolesWith('job:work'))
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Report arriving at the shop (the assigned WORKER)',
+    description:
+      'EN_ROUTE → ARRIVED. The position is recorded and its distance from the shop ' +
+      'computed; managers see it, flagged beyond the organization radius. It never refuses ' +
+      'the step (GPS can be wrong).',
+  })
+  @ApiEnvelopeResponse(JobDetailDto, { description: 'The job, now ARRIVED.' })
+  @IdempotencyKeyHeader()
+  @ApiErrorResponses(
+    INVALID,
+    UNAUTHENTICATED,
+    FORBIDDEN,
+    NOT_FOUND,
+    WRONG_STATUS,
+  )
+  arrive(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param() params: JobIdParamDto,
+    @Body() dto: JobCommandDto,
+    @IdempotencyKey() idempotencyKey: string | undefined,
+  ): Promise<JobDetailDto> {
+    return this.jobs.arrive(user, params.id, idempotencyKey, dto.location);
+  }
+
+  @Post(':id/submit')
+  @Roles(...rolesWith('job:work'))
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Submit the result for verification (the assigned WORKER)',
+    description:
+      'IN_PROGRESS → SUBMITTED. What is required depends on the type: proof photos for ' +
+      'deliveries and collections, every checklist answer for visits and counts, the ' +
+      'delivered or counted quantities, the new order lines, or the payment collected ' +
+      '(never more than the order still owes; a reference except for cash, used once). ' +
+      'Nothing takes effect before a manager verifies it.',
+  })
+  @ApiEnvelopeResponse(JobDetailDto, { description: 'The job, now SUBMITTED.' })
+  @IdempotencyKeyHeader()
+  @ApiErrorResponses(
+    INVALID,
+    UNAUTHENTICATED,
+    FORBIDDEN,
+    NOT_FOUND,
+    WRONG_STATUS,
+    REQUIREMENTS,
+    {
+      status: HttpStatus.CONFLICT,
+      description: 'DUPLICATE_PAYMENT_REFERENCE',
+    },
+  )
+  submit(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param() params: JobIdParamDto,
+    @Body() dto: SubmitJobDto,
+    @IdempotencyKey() idempotencyKey: string | undefined,
+  ): Promise<JobDetailDto> {
+    return this.jobs.submit(user, params.id, dto, idempotencyKey);
+  }
+
+  @Post(':id/fail')
+  @Roles(...rolesWith('job:work'))
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Report that the operation cannot be carried out (the assigned WORKER)',
+    description:
+      'ACCEPTED, EN_ROUTE, ARRIVED or IN_PROGRESS → FAILED, with a reason.',
+  })
+  @ApiEnvelopeResponse(JobDetailDto, { description: 'The job, now FAILED.' })
+  @IdempotencyKeyHeader()
+  @ApiErrorResponses(
+    INVALID,
+    UNAUTHENTICATED,
+    FORBIDDEN,
+    NOT_FOUND,
+    WRONG_STATUS,
+  )
+  fail(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param() params: JobIdParamDto,
+    @Body() dto: FailJobDto,
+    @IdempotencyKey() idempotencyKey: string | undefined,
+  ): Promise<JobDetailDto> {
+    return this.jobs.fail(
+      user,
+      params.id,
+      dto.reason,
+      idempotencyKey,
+      dto.location,
+    );
+  }
+
+  @Post(':id/verify')
+  @Roles(...rolesWith('job:review'))
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Verify a submitted result (MANAGER, ORGANIZATION_ADMIN)',
+    description:
+      'SUBMITTED → COMPLETED. Now it takes effect: the payment counts towards the order, ' +
+      'the delivery raises delivered quantities, the order collection becomes an order.',
+  })
+  @ApiEnvelopeResponse(JobDetailDto, { description: 'The job, now COMPLETED.' })
+  @ApiErrorResponses(
+    INVALID,
+    UNAUTHENTICATED,
+    FORBIDDEN,
+    NOT_FOUND,
+    WRONG_STATUS,
+  )
+  verify(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param() params: JobIdParamDto,
+    @Body() dto: VerifyJobDto,
+  ): Promise<JobDetailDto> {
+    return this.jobs.verify(user, params.id, dto);
+  }
+
+  @Post(':id/reject')
+  @Roles(...rolesWith('job:review'))
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Send a submitted result back for rework (MANAGER, ORGANIZATION_ADMIN)',
+    description:
+      'SUBMITTED → IN_PROGRESS, with a reason; a submitted payment is rejected (it never counts).',
+  })
+  @ApiEnvelopeResponse(JobDetailDto, {
+    description: 'The job, now IN_PROGRESS.',
+  })
+  @ApiErrorResponses(
+    INVALID,
+    UNAUTHENTICATED,
+    FORBIDDEN,
+    NOT_FOUND,
+    WRONG_STATUS,
+  )
+  reject(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param() params: JobIdParamDto,
+    @Body() dto: RejectJobDto,
+  ): Promise<JobDetailDto> {
+    return this.jobs.reject(user, params.id, dto.reason);
+  }
+
+  @Post(':id/reschedule')
+  @Roles(...rolesWith('job:reschedule'))
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Move the due time (MANAGER, ORGANIZATION_ADMIN)',
+    description:
+      'Before the worker sets off. An accepted operation returns to ASSIGNED so the worker ' +
+      'confirms the new time; the worker is notified.',
+  })
+  @ApiEnvelopeResponse(JobDetailDto, { description: 'The job.' })
+  @ApiErrorResponses(
+    INVALID,
+    UNAUTHENTICATED,
+    FORBIDDEN,
+    NOT_FOUND,
+    WRONG_STATUS,
+  )
+  reschedule(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param() params: JobIdParamDto,
+    @Body() dto: RescheduleJobDto,
+  ): Promise<JobDetailDto> {
+    return this.jobs.reschedule(user, params.id, dto);
+  }
+
   @Post(':id/start')
   @Roles(...rolesWith('job:work'))
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Start an assigned job (the assigned WORKER)',
+    summary: 'Start the work (the assigned WORKER)',
     description:
-      'ASSIGNED → IN_PROGRESS. Repeating it on an IN_PROGRESS job succeeds without changes. ' +
-      "The body may carry the phone's position fix, recorded with the history entry.",
+      'GENERAL: ASSIGNED → IN_PROGRESS; other types: ARRIVED → IN_PROGRESS. Repeating it on ' +
+      "an IN_PROGRESS job succeeds without changes. The body may carry the phone's position.",
   })
   @ApiEnvelopeResponse(JobDetailDto, {
     description: 'The job, now IN_PROGRESS.',
@@ -298,10 +564,10 @@ export class JobsController {
   @Roles(...rolesWith('job:work'))
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Complete an in-progress job (the assigned WORKER)',
+    summary: 'Complete a GENERAL job (the assigned WORKER)',
     description:
-      'IN_PROGRESS → COMPLETED. Repeating it on a COMPLETED job succeeds without changes. ' +
-      "The body may carry the phone's position fix.",
+      'Basic lifecycle only: IN_PROGRESS → COMPLETED. Other types are submitted and ' +
+      'verified instead. Repeating it succeeds without changes.',
   })
   @IdempotencyKeyHeader()
   @ApiEnvelopeResponse(JobDetailDto, { description: 'The job, now COMPLETED.' })
@@ -416,7 +682,7 @@ export class JobsController {
   @Header('Cache-Control', 'private, max-age=86400')
   @ApiProduces('image/jpeg', 'image/png')
   @ApiOperation({
-    summary: 'Download a photo (the assigned WORKER, MANAGER, ADMIN)',
+    summary: 'Download a photo (the assigned WORKER and staff)',
     description:
       'The stored (metadata-free) bytes. Anyone who may see the job may see its photos.',
   })
@@ -442,7 +708,7 @@ export class JobsController {
   @Roles(...rolesWith('job:message'))
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
-    summary: 'Post a message on a job (its WORKER, MANAGER, ADMIN)',
+    summary: 'Post a message on a job (its WORKER and staff)',
     description:
       'Append-only, on a job in any status. The message ID comes from the sending device: ' +
       'sending the same message again changes nothing.',
@@ -470,7 +736,7 @@ export class JobsController {
   @Roles(...rolesWith('job:cancel'))
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Cancel a job (MANAGER, ADMIN)',
+    summary: 'Cancel a job (MANAGER, ORGANIZATION_ADMIN)',
     description:
       'Any status before COMPLETED. Cancelled jobs are closed for good.',
   })

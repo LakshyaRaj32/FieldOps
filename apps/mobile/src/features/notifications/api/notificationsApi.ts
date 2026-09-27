@@ -22,13 +22,13 @@ function isNotification(value: unknown): value is AppNotification {
   if (!isRecord(value)) {
     return false;
   }
-  const { id, type, jobId, title, body, createdAt, readAt } = value;
+  const { id, type, jobId, shopId, title, body, createdAt, readAt } = value;
+  const nullableString = (field: unknown) =>
+    field === null || typeof field === 'string';
   return (
-    [id, jobId, title, body, createdAt].every(
-      field => typeof field === 'string',
-    ) &&
-    TYPES.includes(type as string) &&
-    (readAt === null || typeof readAt === 'string')
+    [id, title, body, createdAt].every(field => typeof field === 'string') &&
+    [jobId, shopId, readAt].every(nullableString) &&
+    TYPES.includes(type as string)
   );
 }
 

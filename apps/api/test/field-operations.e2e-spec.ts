@@ -13,9 +13,12 @@ import type {
 import {
   createTestApp,
   eventually,
+  joinOrganization,
   resetDatabase,
   type TestApp,
 } from './helpers/test-app.js';
+
+type JoinRole = Parameters<typeof joinOrganization>[2];
 
 /**
  * Phase 4 (Field Operations) over the real HTTP pipeline and PostgreSQL: location on job
@@ -41,12 +44,7 @@ function jpeg(width: number, height: number, withExif = true): Buffer {
   return Buffer.concat([
     Buffer.from([0xff, 0xd8]),
     ...(withExif
-      ? [
-          segment(
-            0xe1,
-            Buffer.from('Exif\0\0GPS 28.6139N 77.2090E', 'latin1'),
-          ),
-        ]
+      ? [segment(0xe1, Buffer.from('Exif\0\0GPS 28.6139N 77.2090E', 'latin1'))]
       : []),
     segment(0xc0, sof),
     segment(0xda, Buffer.from([1, 1, 0, 0, 0x3f, 0])),
@@ -86,9 +84,10 @@ describe('Field operations (e2e)', () => {
         lastName: 'Test',
       });
     const { user, tokens } = (response.body as { data: AuthResult }).data;
-    if (role !== 'WORKER') {
-      await t.prisma.user.update({ where: { id: user.id }, data: { role } });
-    }
+    // Phase 2-4 semantics: one manager runs the whole organization.
+    await joinOrganization(t.prisma, user.id, role as JoinRole, undefined, {
+      organizationWideAccess: role === 'MANAGER',
+    });
     return { id: user.id, token: tokens.accessToken };
   }
 
@@ -163,9 +162,13 @@ describe('Field operations (e2e)', () => {
       });
 
       // Managers see it too, and it is part of the worker's offline snapshot.
-      const forManager = dataOf<JobDetail>(await get(manager, `/jobs/${job.id}`));
+      const forManager = dataOf<JobDetail>(
+        await get(manager, `/jobs/${job.id}`),
+      );
       expect(forManager.startLocation?.distanceMeters).toBe(111);
-      const set = dataOf<JobWorkingSet>(await get(workerA, '/jobs/working-set'));
+      const set = dataOf<JobWorkingSet>(
+        await get(workerA, '/jobs/working-set'),
+      );
       expect(set.jobs[0]?.completeLocation?.distanceMeters).toBe(0);
     });
 
@@ -202,9 +205,9 @@ describe('Field operations (e2e)', () => {
         expect(codeOf(response)).toBe('VALIDATION_ERROR');
       }
       // Nothing was applied.
-      expect(dataOf<JobDetail>(await get(workerA, `/jobs/${job.id}`)).status).toBe(
-        'ASSIGNED',
-      );
+      expect(
+        dataOf<JobDetail>(await get(workerA, `/jobs/${job.id}`)).status,
+      ).toBe('ASSIGNED');
     });
 
     it('keeps the first fix when a command with a location is retried', async () => {
@@ -256,7 +259,13 @@ describe('Field operations (e2e)', () => {
       const id = randomUUID();
 
       // The client claims a PDF; the server believes the bytes.
-      const response = await upload(workerA, job.id, jpeg(1920, 1080), { id }, 'application/pdf');
+      const response = await upload(
+        workerA,
+        job.id,
+        jpeg(1920, 1080),
+        { id },
+        'application/pdf',
+      );
 
       expect(response.status).toBe(201);
       expect(dataOf<JobDetail>(response).evidence).toEqual([
@@ -266,7 +275,11 @@ describe('Field operations (e2e)', () => {
           sizeBytes: expect.any(Number),
           width: 1920,
           height: 1080,
-          uploadedBy: { id: workerA.id, firstName: 'worker-a', lastName: 'Test' },
+          uploadedBy: {
+            id: workerA.id,
+            firstName: 'worker-a',
+            lastName: 'Test',
+          },
           capturedAt: '2026-09-28T05:10:00.000Z',
           createdAt: expect.any(String),
         },
@@ -312,7 +325,11 @@ describe('Field operations (e2e)', () => {
       expect(script.status).toBe(415);
       expect(codeOf(script)).toBe('UNSUPPORTED_FILE_TYPE');
 
-      const truncated = await upload(workerA, job.id, jpeg(10, 10).subarray(0, 12));
+      const truncated = await upload(
+        workerA,
+        job.id,
+        jpeg(10, 10).subarray(0, 12),
+      );
       expect(codeOf(truncated)).toBe('UNSUPPORTED_FILE_TYPE');
 
       const missing = await upload(workerA, job.id, null);
@@ -373,7 +390,11 @@ describe('Field operations (e2e)', () => {
     it('carries a conversation between the worker and managers', async () => {
       const job = await assignedJob();
 
-      const fromWorker = await post(workerA, `/jobs/${job.id}/messages`, message());
+      const fromWorker = await post(
+        workerA,
+        `/jobs/${job.id}/messages`,
+        message(),
+      );
       expect(fromWorker.status).toBe(201);
       const reply = await post(
         manager,
@@ -388,13 +409,19 @@ describe('Field operations (e2e)', () => {
         [manager.id, 'Yes, take it.'],
       ]);
       // In the worker's offline snapshot too.
-      const set = dataOf<JobWorkingSet>(await get(workerA, '/jobs/working-set'));
+      const set = dataOf<JobWorkingSet>(
+        await get(workerA, '/jobs/working-set'),
+      );
       expect(set.jobs[0]?.messages).toHaveLength(2);
     });
 
     it("keeps other workers out of a job's conversation", async () => {
       const job = await assignedJob(workerA);
-      const response = await post(workerB, `/jobs/${job.id}/messages`, message());
+      const response = await post(
+        workerB,
+        `/jobs/${job.id}/messages`,
+        message(),
+      );
       expect(response.status).toBe(404);
     });
 
@@ -446,7 +473,7 @@ describe('Field operations (e2e)', () => {
         expect(page.items[0]).toMatchObject({
           type: 'JOB_ASSIGNED',
           jobId: job.id,
-          title: 'New job assigned',
+          title: 'New operation assigned',
           body: '“AC repair”',
           readAt: null,
         });
@@ -460,6 +487,8 @@ describe('Field operations (e2e)', () => {
       expect(push?.message.data).toEqual({
         type: 'JOB_ASSIGNED',
         jobId: job.id,
+        // FCM data values are strings: no shop on a GENERAL job.
+        shopId: '',
         notificationId: expect.any(String),
       });
       expect(JSON.stringify(push?.message)).not.toContain('AC repair');
@@ -529,16 +558,16 @@ describe('Field operations (e2e)', () => {
       const foreign = await post(workerB, `/notifications/${first?.id}/read`);
       expect(foreign.status).toBe(404);
 
-      expect((await post(workerA, `/notifications/${first?.id}/read`)).status).toBe(
-        204,
-      );
+      expect(
+        (await post(workerA, `/notifications/${first?.id}/read`)).status,
+      ).toBe(204);
       expect((await inbox(workerA)).unreadCount).toBe(1);
       expect((await post(workerA, '/notifications/read-all')).status).toBe(204);
       const after = await inbox(workerA);
       expect(after.unreadCount).toBe(0);
-      expect(after.items.every((item: AppNotification) => item.readAt !== null)).toBe(
-        true,
-      );
+      expect(
+        after.items.every((item: AppNotification) => item.readAt !== null),
+      ).toBe(true);
     });
 
     it('paginates the inbox newest first', async () => {
@@ -553,11 +582,16 @@ describe('Field operations (e2e)', () => {
       );
       expect(firstPage.items).toHaveLength(2);
       const secondPage = dataOf<NotificationPage>(
-        await get(workerA, `/notifications?limit=2&cursor=${firstPage.nextCursor}`),
+        await get(
+          workerA,
+          `/notifications?limit=2&cursor=${firstPage.nextCursor}`,
+        ),
       );
       expect(secondPage.items).toHaveLength(1);
       expect(secondPage.nextCursor).toBeNull();
-      const ids = [...firstPage.items, ...secondPage.items].map(item => item.id);
+      const ids = [...firstPage.items, ...secondPage.items].map(
+        item => item.id,
+      );
       expect(new Set(ids).size).toBe(3);
     });
 
@@ -596,7 +630,9 @@ describe('Field operations (e2e)', () => {
 
     it('validates tokens and lets a device unregister itself', async () => {
       expect((await register(workerA, 'short')).status).toBe(400);
-      expect((await register(workerA, `${'x'.repeat(30)} ;drop`)).status).toBe(400);
+      expect((await register(workerA, `${'x'.repeat(30)} ;drop`)).status).toBe(
+        400,
+      );
       await register(workerA, TOKEN_A);
       const removed = await t
         .http()

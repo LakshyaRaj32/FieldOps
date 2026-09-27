@@ -20,6 +20,7 @@ import { selectSession } from '../../store/slices/sessionSlice';
 import { logger } from '../../utils/logger';
 import {
   openJobWhenReady,
+  openShopWhenReady,
   openNotificationsWhenReady,
 } from '../navigation/navigationRef';
 import { useResync } from './RealtimeConnection';
@@ -27,7 +28,7 @@ import { useResync } from './RealtimeConnection';
 /** The job a push message is about, if it names one. */
 function jobIdOf(data: Readonly<Record<string, string>> | null) {
   const { jobId } = data ?? {};
-  return typeof jobId === 'string' ? jobId : undefined;
+  return typeof jobId === 'string' && jobId !== '' ? jobId : undefined;
 }
 
 /**
@@ -94,6 +95,8 @@ export function PushNotifications({
         const route = routeFor(data);
         if (route?.screen === 'job') {
           openJobWhenReady(route.jobId);
+        } else if (route?.screen === 'shop') {
+          openShopWhenReady(route.shopId);
         } else if (route?.screen === 'inbox') {
           openNotificationsWhenReady();
         }

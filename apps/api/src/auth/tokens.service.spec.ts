@@ -85,7 +85,10 @@ describe('TokensService', () => {
     });
 
     it('reject an access token presented as a refresh token', () => {
-      const access = tokens.issueAccessToken({ ...claims, role: Role.ADMIN });
+      const access = tokens.issueAccessToken({
+        ...claims,
+        role: Role.ORGANIZATION_ADMIN,
+      });
       expect(tokens.verifyRefreshToken(access.token)).toBeUndefined();
     });
 

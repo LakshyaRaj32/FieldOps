@@ -17,6 +17,16 @@
       "types": "./src/geo.ts",
       "react-native": "./src/geo.ts",
       "default": "./dist/geo.js"
+    },
+    "./requirements": {
+      "types": "./src/operation-requirements.ts",
+      "react-native": "./src/operation-requirements.ts",
+      "default": "./dist/operation-requirements.js"
+    },
+    "./money": {
+      "types": "./src/money.ts",
+      "react-native": "./src/money.ts",
+      "default": "./dist/money.js"
     }
   },
   "scripts": {

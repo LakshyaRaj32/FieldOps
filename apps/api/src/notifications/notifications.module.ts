@@ -7,10 +7,7 @@ import { APP_CONFIG, type AppConfig } from '../config/app-config.js';
 import { NotificationsRepository } from './data/notifications.repository.js';
 import { NotificationsController } from './notifications.controller.js';
 import { NotificationsService } from './notifications.service.js';
-import {
-  FcmPushSender,
-  parseServiceAccount,
-} from './push/fcm-push-sender.js';
+import { FcmPushSender, parseServiceAccount } from './push/fcm-push-sender.js';
 import {
   DisabledPushSender,
   PUSH_SENDER,

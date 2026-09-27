@@ -1,15 +1,20 @@
+import { OPEN_STATUSES } from '@fieldops/shared';
+import { formatMoney } from '@fieldops/shared/money';
 import {
   JobAction,
   JobEventType,
   JobPriority,
   JobStatus,
+  JobType,
+  PaymentMethod,
+  PaymentStatus,
   type ActionLocation,
   type JobHistoryEntry,
   type JobSummary,
   type UserSummary,
 } from '@fieldops/types';
 
-import type { BadgeTone, ButtonVariant } from '../../components/ui';
+import type { BadgeTone, ButtonVariant, IconName } from '../../components/ui';
 import { RETRY_POLICY } from './data/retryPolicy';
 import type { SyncStatus } from './data/syncEngine';
 import type {
@@ -26,18 +31,66 @@ import type {
 export const STATUS_LABELS: Readonly<Record<JobStatus, string>> = {
   PENDING: 'Unassigned',
   ASSIGNED: 'Assigned',
+  ACCEPTED: 'Accepted',
+  EN_ROUTE: 'On the way',
+  ARRIVED: 'At the shop',
   IN_PROGRESS: 'In progress',
+  SUBMITTED: 'Awaiting verification',
   COMPLETED: 'Completed',
   CANCELLED: 'Cancelled',
+  FAILED: 'Failed',
 };
 
 export const STATUS_TONES: Readonly<Record<JobStatus, BadgeTone>> = {
   PENDING: 'warning',
   ASSIGNED: 'primary',
-  IN_PROGRESS: 'primary',
+  ACCEPTED: 'primary',
+  EN_ROUTE: 'info',
+  ARRIVED: 'info',
+  IN_PROGRESS: 'info',
+  SUBMITTED: 'warning',
   COMPLETED: 'success',
   CANCELLED: 'neutral',
+  FAILED: 'danger',
 };
+
+export const TYPE_LABELS: Readonly<Record<JobType, string>> = {
+  GENERAL: 'Job',
+  DELIVERY: 'Delivery',
+  PAYMENT_COLLECTION: 'Payment collection',
+  SHOP_VISIT: 'Shop visit',
+  ORDER_COLLECTION: 'Order collection',
+  INVENTORY_CHECK: 'Inventory check',
+};
+
+export const TYPE_ICONS: Readonly<Record<JobType, IconName>> = {
+  GENERAL: 'construct-outline',
+  DELIVERY: 'cube-outline',
+  PAYMENT_COLLECTION: 'wallet-outline',
+  SHOP_VISIT: 'storefront-outline',
+  ORDER_COLLECTION: 'cart-outline',
+  INVENTORY_CHECK: 'clipboard-outline',
+};
+
+export const PAYMENT_METHOD_LABELS: Readonly<Record<PaymentMethod, string>> = {
+  CASH: 'Cash',
+  UPI: 'UPI',
+  BANK_TRANSFER: 'Bank transfer',
+  CHEQUE: 'Cheque',
+  CARD: 'Card',
+};
+
+export const PAYMENT_STATUS_BADGES: Readonly<
+  Record<PaymentStatus, { label: string; tone: BadgeTone }>
+> = {
+  PENDING_VERIFICATION: { label: 'Awaiting verification', tone: 'warning' },
+  VERIFIED: { label: 'Verified', tone: 'success' },
+  REJECTED: { label: 'Rejected', tone: 'danger' },
+};
+
+/** An amount in minor units, in the organization's currency ("₹2,00,000"). */
+export const money = (minor: number, currency = 'INR'): string =>
+  formatMoney(minor, currency);
 
 export const PRIORITY_LABELS: Readonly<Record<JobPriority, string>> = {
   LOW: 'Low',
@@ -67,14 +120,11 @@ export type JobListView = 'active' | 'closed';
 export const LIST_VIEWS: Readonly<
   Record<JobListView, { statuses: readonly JobStatus[]; order: 'asc' | 'desc' }>
 > = {
-  // Next appointment first.
-  active: {
-    statuses: [JobStatus.PENDING, JobStatus.ASSIGNED, JobStatus.IN_PROGRESS],
-    order: 'asc',
-  },
+  // Next appointment first; a submitted result is still open (waiting for verification).
+  active: { statuses: OPEN_STATUSES, order: 'asc' },
   // Most recent first.
   closed: {
-    statuses: [JobStatus.COMPLETED, JobStatus.CANCELLED],
+    statuses: [JobStatus.COMPLETED, JobStatus.CANCELLED, JobStatus.FAILED],
     order: 'desc',
   },
 };
@@ -151,6 +201,12 @@ export interface JobCommand {
     readonly message: string;
     readonly confirmLabel: string;
   };
+  /** The command needs a reason, asked for before it runs (decline, fail, reject). */
+  readonly reason?: {
+    readonly title: string;
+    readonly placeholder: string;
+    readonly required: boolean;
+  };
 }
 
 /**
@@ -160,18 +216,85 @@ export interface JobCommand {
  * its own input, so it is not a button.
  */
 export function jobCommands(
-  job: Pick<JobSummary, 'allowedActions' | 'assignedWorker'>,
+  job: Pick<JobSummary, 'allowedActions' | 'assignedWorker'> & {
+    readonly type?: JobType;
+  },
 ): JobCommand[] {
+  const general = (job.type ?? JobType.GENERAL) === JobType.GENERAL;
   return job.allowedActions.flatMap(action => {
-    const command = commandFor(action, job.assignedWorker !== null);
+    const command = commandFor(action, job.assignedWorker !== null, general);
     return command === null ? [] : [command];
   });
 }
 
-function commandFor(action: JobAction, assigned: boolean): JobCommand | null {
+function commandFor(
+  action: JobAction,
+  assigned: boolean,
+  general: boolean,
+): JobCommand | null {
   switch (action) {
+    case JobAction.ACCEPT:
+      return { action, label: 'Accept', variant: 'primary' };
+    case JobAction.DEPART:
+      return { action, label: "I'm on my way", variant: 'primary' };
+    case JobAction.ARRIVE:
+      return { action, label: "I've arrived", variant: 'primary' };
     case JobAction.START:
-      return { action, label: 'Start job', variant: 'primary' };
+      return {
+        action,
+        label: general ? 'Start job' : 'Start work',
+        variant: 'primary',
+      };
+    case JobAction.DECLINE:
+      return {
+        action,
+        label: 'Hand back',
+        variant: 'secondary',
+        reason: {
+          title: 'Why are you handing this back?',
+          placeholder: 'For example: on leave that day',
+          required: true,
+        },
+      };
+    case JobAction.FAIL:
+      return {
+        action,
+        label: "Can't be done",
+        variant: 'danger',
+        reason: {
+          title: 'What stopped you?',
+          placeholder: 'For example: the shop was closed',
+          required: true,
+        },
+      };
+    case JobAction.VERIFY:
+      return {
+        action,
+        label: 'Verify',
+        variant: 'primary',
+        confirm: {
+          title: 'Verify this result?',
+          message:
+            'It takes effect now: payments count towards the order, deliveries and new orders are recorded.',
+          confirmLabel: 'Verify',
+        },
+      };
+    case JobAction.REJECT:
+      return {
+        action,
+        label: 'Send back',
+        variant: 'secondary',
+        reason: {
+          title: 'What must the worker correct?',
+          placeholder: 'For example: the receipt photo is unreadable',
+          required: true,
+        },
+      };
+    case JobAction.RESCHEDULE:
+      return { action, label: 'Reschedule', variant: 'secondary' };
+    case JobAction.SUBMIT:
+      // Submitting is the result form's own button (it needs the answers and counts).
+      return null;
     case JobAction.COMPLETE:
       return {
         action,
@@ -195,23 +318,22 @@ function commandFor(action: JobAction, assigned: boolean): JobCommand | null {
     case JobAction.CANCEL:
       return {
         action,
-        label: 'Cancel job',
+        label: general ? 'Cancel job' : 'Cancel operation',
         variant: 'danger',
         confirm: {
-          title: 'Cancel this job?',
-          message:
-            'The job will be closed and the worker can no longer work on it.',
-          confirmLabel: 'Cancel job',
+          title: general ? 'Cancel this job?' : 'Cancel this operation?',
+          message: 'It will be closed and the worker can no longer work on it.',
+          confirmLabel: general ? 'Cancel job' : 'Cancel operation',
         },
       };
     case JobAction.DELETE:
       return {
         action,
-        label: 'Delete job',
+        label: general ? 'Delete job' : 'Delete operation',
         variant: 'danger',
         confirm: {
-          title: 'Delete this job?',
-          message: 'The job will be removed permanently.',
+          title: general ? 'Delete this job?' : 'Delete this operation?',
+          message: 'It will be removed permanently.',
           confirmLabel: 'Delete',
         },
       };
@@ -226,6 +348,7 @@ function commandFor(action: JobAction, assigned: boolean): JobCommand | null {
 /** One line of job history, for example "Assigned to Asha Verma by Ravi Kumar". */
 export function describeHistoryEntry(entry: JobHistoryEntry): string {
   const actor = fullName(entry.actor);
+  const why = entry.reason === null ? '' : `: ${entry.reason}`;
   switch (entry.type) {
     case JobEventType.CREATED:
       return `Created by ${actor}`;
@@ -233,19 +356,43 @@ export function describeHistoryEntry(entry: JobHistoryEntry): string {
       return entry.assignee === null
         ? `Assigned by ${actor}`
         : `Assigned to ${fullName(entry.assignee)} by ${actor}`;
+    case JobEventType.ACCEPTED:
+      return `Accepted by ${actor}`;
+    case JobEventType.DECLINED:
+      return `Handed back by ${actor}${why}`;
+    case JobEventType.DEPARTED:
+      return `${actor} set off`;
+    case JobEventType.ARRIVED:
+      return `${actor} arrived`;
     case JobEventType.STARTED:
       return `Started by ${actor}`;
+    case JobEventType.SUBMITTED:
+      return `Submitted by ${actor}`;
+    case JobEventType.VERIFIED:
+      return `Verified by ${actor}${why}`;
+    case JobEventType.REJECTED:
+      return `Sent back by ${actor}${why}`;
     case JobEventType.COMPLETED:
       return `Completed by ${actor}`;
+    case JobEventType.FAILED:
+      return `Could not be done (${actor})${why}`;
     case JobEventType.CANCELLED:
-      return `Cancelled by ${actor}`;
+      return `Cancelled by ${actor}${why}`;
+    case JobEventType.RESCHEDULED:
+      return `Rescheduled by ${actor}${why}`;
   }
 }
 
 /** How the worker's offline commands are named in the UI. */
 export const OUTBOX_LABELS: Readonly<Record<OutboxType, string>> = {
+  'job.accept': 'Accept',
+  'job.decline': 'Hand back',
+  'job.depart': 'On my way',
+  'job.arrive': 'Arrived',
   'job.start': 'Start job',
   'job.complete': 'Complete job',
+  'job.submit': 'Submit result',
+  'job.fail': "Can't be done",
   'job.note.add': 'Note',
   'job.evidence.add': 'Photo',
   'job.message.send': 'Message',
@@ -258,6 +405,19 @@ export function formatDistance(meters: number): string {
   }
   const km = meters / 1000;
   return km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
+}
+
+/**
+ * Whether a reported position is farther from the site than the organization's radius
+ * (a hint for the manager; nothing is blocked by it, GPS can be wrong).
+ */
+export function isOutsideSite(
+  location: ActionLocation,
+  radiusMeters: number,
+): boolean {
+  return (
+    location.distanceMeters !== null && location.distanceMeters > radiusMeters
+  );
 }
 
 /**

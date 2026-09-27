@@ -40,6 +40,11 @@ export interface AppConfig {
    * Undefined: push is disabled; in-app notifications and realtime still work.
    */
   readonly fcmServiceAccountFile: string | undefined;
+  /**
+   * How often the overdue-payment scan runs, in seconds; 0 turns it off (tests, and any
+   * instance that should not run it).
+   */
+  readonly overdueScanIntervalSeconds: number;
 }
 
 /** Injection token for AppConfig. */
@@ -166,6 +171,12 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
     errors.push('FCM_SERVICE_ACCOUNT_FILE must be the path of a .json file.');
   }
 
+  const overdueValue = read('OVERDUE_SCAN_INTERVAL') || '1h';
+  let overdueScanIntervalSeconds = 0;
+  if (overdueValue !== 'off') {
+    overdueScanIntervalSeconds = duration('OVERDUE_SCAN_INTERVAL', '1h');
+  }
+
   if (errors.length > 0) {
     throw new Error(
       `Invalid configuration:\n${errors.map(error => `  - ${error}`).join('\n')}`,
@@ -187,5 +198,6 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
     swaggerEnabled,
     storageDir,
     fcmServiceAccountFile,
+    overdueScanIntervalSeconds,
   };
 }

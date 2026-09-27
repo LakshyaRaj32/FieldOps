@@ -3,6 +3,7 @@
  * and the mobile app (which consumes them). See docs/authentication.md.
  */
 
+import type { OrganizationSummary } from './organizations';
 import type { Role } from './role';
 
 /** The public view of a user. Never contains the password hash. */
@@ -13,6 +14,10 @@ export interface UserProfile {
   readonly lastName: string;
   readonly role: Role;
   readonly isActive: boolean;
+  /** The organization the user belongs to; null for SUPER_ADMIN and unaffiliated accounts. */
+  readonly organization: OrganizationSummary | null;
+  /** MANAGER: sees every team, shop and operation of the organization. */
+  readonly organizationWideAccess: boolean;
   /** ISO 8601 timestamp. */
   readonly createdAt: string;
 }

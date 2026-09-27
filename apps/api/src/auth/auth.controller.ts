@@ -24,6 +24,7 @@ import type { AuthenticatedUser } from '../common/types/authenticated-user.js';
 import { UserProfileDto } from '../users/dto/user-profile.dto.js';
 import { AuthService } from './auth.service.js';
 import { AuthResultDto, AuthTokensDto } from './dto/auth-response.dto.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
@@ -78,7 +79,10 @@ export class AuthController {
   @ApiErrorResponses(
     VALIDATION_FAILED,
     { status: HttpStatus.UNAUTHORIZED, description: 'INVALID_CREDENTIALS' },
-    { status: HttpStatus.FORBIDDEN, description: 'ACCOUNT_DISABLED' },
+    {
+      status: HttpStatus.FORBIDDEN,
+      description: 'ACCOUNT_DISABLED, ORGANIZATION_SUSPENDED',
+    },
   )
   login(
     @Body() dto: LoginDto,
@@ -119,6 +123,24 @@ export class AuthController {
   })
   logout(@CurrentUser() user: AuthenticatedUser): Promise<void> {
     return this.auth.logout(user.sessionId);
+  }
+
+  @Post('change-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Change the password (every other session is signed out)',
+  })
+  @ApiNoContentResponse({ description: 'Changed.' })
+  @ApiErrorResponses(VALIDATION_FAILED, {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    description: 'INVALID_CREDENTIALS: the current password is wrong.',
+  })
+  changePassword(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ChangePasswordDto,
+  ): Promise<void> {
+    return this.auth.changePassword(user.userId, user.sessionId, dto);
   }
 
   @Get('me')

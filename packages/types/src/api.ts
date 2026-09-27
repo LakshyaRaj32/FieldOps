@@ -38,6 +38,22 @@ export type ApiErrorCode =
   | 'INVALID_ASSIGNEE'
   /** The resource changed since the client read it: refetch and retry. */
   | 'VERSION_CONFLICT'
+  /** The account is not a member of an organization, so it has no business data. */
+  | 'NOT_IN_ORGANIZATION'
+  /** The user's organization is suspended by the platform. */
+  | 'ORGANIZATION_SUSPENDED'
+  /** A shop, order, product, manager or worker the request refers to cannot be used. */
+  | 'INVALID_REFERENCE'
+  /** A submission lacks what the operation requires (evidence, counts, payment...). */
+  | 'REQUIREMENTS_NOT_MET'
+  /** An amount is larger than the balance it is taken from. */
+  | 'AMOUNT_EXCEEDS_BALANCE'
+  /** This payment reference was already recorded in the organization. */
+  | 'DUPLICATE_PAYMENT_REFERENCE'
+  /** The order has payments, deliveries or open operations, so it can't be cancelled. */
+  | 'ORDER_NOT_CANCELLABLE'
+  /** A unique name, SKU or email is already taken. `details` names the field. */
+  | 'ALREADY_EXISTS'
   /** The Idempotency-Key (or client-generated ID) was already used for a different request. */
   | 'IDEMPOTENCY_KEY_REUSED'
   | 'PAYLOAD_TOO_LARGE'

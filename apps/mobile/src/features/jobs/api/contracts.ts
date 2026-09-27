@@ -4,53 +4,46 @@ import {
   JobEventType,
   JobPriority,
   JobStatus,
+  JobType,
+  PaymentMethod,
+  PaymentStatus,
   type JobDetail,
   type JobOverview,
   type JobPage,
   type JobSummary,
   type JobWorkingSet,
-  type UserSummary,
+  type PaymentRecord,
   type WorkerSummary,
 } from '@fieldops/types';
 
+import {
+  isArrayOf,
+  isBoolean,
+  isNullableGeoPoint,
+  isNullableNumber,
+  isNullableString,
+  isNullableUser,
+  isNumber,
+  isRecord,
+  isString,
+  isUserSummary,
+  oneOf,
+} from '../../../services/api/guards';
+import { isProduct } from '../../catalog/api/contracts';
+
 /**
- * Runtime checks for the job payloads the app receives. TypeScript types are erased at
+ * Runtime checks for the operation payloads the app receives. TypeScript types are erased at
  * runtime, so data crossing the network boundary is checked before screens trust it (the
  * same rule as services/auth/contracts.ts).
  */
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-const isString = (value: unknown): value is string => typeof value === 'string';
-const isNullableString = (value: unknown): boolean =>
-  value === null || isString(value);
-const isNumber = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isFinite(value);
-const isArrayOf = (value: unknown, guard: (item: unknown) => boolean) =>
-  Array.isArray(value) && value.every(guard);
-
-const oneOf =
-  (vocabulary: Readonly<Record<string, string>>) =>
-  (value: unknown): boolean =>
-    Object.values(vocabulary).includes(value as string);
-
 const isStatus = oneOf(JobStatus);
+const isType = oneOf(JobType);
 const isPriority = oneOf(JobPriority);
 const isAction = oneOf(JobAction);
 const isEventType = oneOf(JobEventType);
-
-function isUserSummary(value: unknown): value is UserSummary {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const { id, firstName, lastName } = value;
-  return [id, firstName, lastName].every(isString);
-}
-
-const isNullableUser = (value: unknown): boolean =>
-  value === null || isUserSummary(value);
+const isMethod = oneOf(PaymentMethod);
+const isPaymentStatus = oneOf(PaymentStatus);
 
 function isJobNote(value: unknown): boolean {
   if (!isRecord(value)) {
@@ -62,12 +55,27 @@ function isJobNote(value: unknown): boolean {
   );
 }
 
+function isJobShop(value: unknown): boolean {
+  if (value === null) {
+    return true;
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  const { id, name, ownerName, phone, address } = value;
+  return (
+    [id, name, address].every(isString) &&
+    [ownerName, phone].every(isNullableString)
+  );
+}
+
 export function isJobSummary(value: unknown): value is JobSummary {
   if (!isRecord(value)) {
     return false;
   }
   const {
     id,
+    type,
     title,
     customerName,
     address,
@@ -77,16 +85,23 @@ export function isJobSummary(value: unknown): value is JobSummary {
     priority,
     version,
     assignedWorker,
+    manager,
+    shop,
+    expectedAmount,
     allowedActions,
   } = value;
   return (
     [id, title, customerName, address, scheduledAt, updatedAt].every(
       isString,
     ) &&
+    isType(type) &&
     isStatus(status) &&
     isPriority(priority) &&
     isNumber(version) &&
     isNullableUser(assignedWorker) &&
+    isUserSummary(manager) &&
+    isJobShop(shop) &&
+    isNullableNumber(expectedAmount) &&
     isArrayOf(allowedActions, isAction)
   );
 }
@@ -95,15 +110,22 @@ function isChecklistItem(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
-  const { id, position, label } = value;
-  return isString(id) && isNumber(position) && isString(label);
+  const { id, position, label, checked, responseNote } = value;
+  return (
+    isString(id) &&
+    isNumber(position) &&
+    isString(label) &&
+    (checked === null || isBoolean(checked)) &&
+    isNullableString(responseNote)
+  );
 }
 
 function isHistoryEntry(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
-  const { id, type, fromStatus, toStatus, actor, assignee, createdAt } = value;
+  const { id, type, fromStatus, toStatus, actor, assignee, reason, createdAt } =
+    value;
   return (
     isString(id) &&
     isEventType(type) &&
@@ -111,19 +133,9 @@ function isHistoryEntry(value: unknown): boolean {
     isStatus(toStatus) &&
     isUserSummary(actor) &&
     isNullableUser(assignee) &&
+    isNullableString(reason) &&
     isString(createdAt)
   );
-}
-
-function isLocation(value: unknown): boolean {
-  if (value === null) {
-    return true;
-  }
-  if (!isRecord(value)) {
-    return false;
-  }
-  const { latitude, longitude } = value;
-  return isNumber(latitude) && isNumber(longitude);
 }
 
 function isActionLocation(value: unknown): boolean {
@@ -138,7 +150,7 @@ function isActionLocation(value: unknown): boolean {
   return (
     [latitude, longitude, accuracyMeters].every(isNumber) &&
     isString(capturedAt) &&
-    (distanceMeters === null || isNumber(distanceMeters))
+    isNullableNumber(distanceMeters)
   );
 }
 
@@ -164,6 +176,64 @@ function isEvidence(value: unknown): boolean {
   );
 }
 
+function isLine(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const {
+    id,
+    position,
+    productId,
+    productName,
+    sku,
+    expectedQuantity,
+    quantity,
+  } = value;
+  return (
+    [id, productId, productName, sku].every(isString) &&
+    isNumber(position) &&
+    isNullableNumber(expectedQuantity) &&
+    isNullableNumber(quantity)
+  );
+}
+
+export function isPaymentRecord(value: unknown): value is PaymentRecord {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const {
+    id,
+    orderId,
+    jobId,
+    amount,
+    method,
+    reference,
+    status,
+    collectedAt,
+    recordedBy,
+    verifiedBy,
+    verifiedAt,
+    rejectionReason,
+    createdAt,
+  } = value;
+  return (
+    [id, orderId, collectedAt, createdAt].every(isString) &&
+    [jobId, reference, verifiedAt, rejectionReason].every(isNullableString) &&
+    isNumber(amount) &&
+    isMethod(method) &&
+    isPaymentStatus(status) &&
+    isUserSummary(recordedBy) &&
+    isNullableUser(verifiedBy)
+  );
+}
+
+function isJobOrder(value: unknown): boolean {
+  return (
+    value === null ||
+    (isRecord(value) && isString(value['id']) && isString(value['orderNumber']))
+  );
+}
+
 export function isJobDetail(value: unknown): value is JobDetail {
   if (!isJobSummary(value) || !isRecord(value)) {
     return false;
@@ -172,15 +242,27 @@ export function isJobDetail(value: unknown): value is JobDetail {
     description,
     notes,
     cancellationReason,
+    acceptedAt,
+    arrivedAt,
     startedAt,
+    submittedAt,
     completedAt,
     cancelledAt,
+    failedAt,
+    failureReason,
+    submissionNote,
     createdAt,
     location,
     createdBy,
+    order,
+    lines,
+    payments,
+    requiresPhoto,
+    siteRadiusMeters,
     checklist,
     history,
     fieldNotes,
+    arrivalLocation,
     startLocation,
     completeLocation,
     evidence,
@@ -191,16 +273,28 @@ export function isJobDetail(value: unknown): value is JobDetail {
       description,
       notes,
       cancellationReason,
+      acceptedAt,
+      arrivedAt,
       startedAt,
+      submittedAt,
       completedAt,
       cancelledAt,
+      failedAt,
+      failureReason,
+      submissionNote,
     ].every(isNullableString) &&
     isString(createdAt) &&
-    isLocation(location) &&
+    isNullableGeoPoint(location) &&
     isUserSummary(createdBy) &&
+    isJobOrder(order) &&
+    isArrayOf(lines, isLine) &&
+    isArrayOf(payments, isPaymentRecord) &&
+    isBoolean(requiresPhoto) &&
+    isNumber(siteRadiusMeters) &&
     isArrayOf(checklist, isChecklistItem) &&
     isArrayOf(history, isHistoryEntry) &&
     isArrayOf(fieldNotes, isJobNote) &&
+    isActionLocation(arrivalLocation) &&
     isActionLocation(startLocation) &&
     isActionLocation(completeLocation) &&
     isArrayOf(evidence, isEvidence) &&
@@ -213,8 +307,12 @@ export function isJobWorkingSet(value: unknown): value is JobWorkingSet {
   if (!isRecord(value)) {
     return false;
   }
-  const { jobs, generatedAt } = value;
-  return isArrayOf(jobs, isJobDetail) && isString(generatedAt);
+  const { jobs, products, generatedAt } = value;
+  return (
+    isArrayOf(jobs, isJobDetail) &&
+    isArrayOf(products, isProduct) &&
+    isString(generatedAt)
+  );
 }
 
 export function isJobPage(value: unknown): value is JobPage {
@@ -226,11 +324,7 @@ export function isJobPage(value: unknown): value is JobPage {
 }
 
 function isWorkerSummary(value: unknown): value is WorkerSummary {
-  if (!isUserSummary(value) || !isRecord(value)) {
-    return false;
-  }
-  const { email } = value as Record<string, unknown>;
-  return isString(email);
+  return isUserSummary(value) && isRecord(value) && isString(value['email']);
 }
 
 export function isWorkerList(value: unknown): value is WorkerSummary[] {
@@ -241,8 +335,7 @@ function isActivity(value: unknown): boolean {
   if (!isHistoryEntry(value) || !isRecord(value)) {
     return false;
   }
-  const { jobId, jobTitle } = value;
-  return isString(jobId) && isString(jobTitle);
+  return isString(value['jobId']) && isString(value['jobTitle']);
 }
 
 function isWorkload(value: unknown): boolean {
@@ -253,27 +346,46 @@ function isWorkload(value: unknown): boolean {
   return isUserSummary(worker) && isNumber(assigned) && isNumber(inProgress);
 }
 
+const allNumbers = (value: unknown, keys: readonly string[]): boolean =>
+  isRecord(value) && keys.every(key => isNumber(value[key]));
+
 /** The manager dashboard's figures (GET /jobs/overview). */
 export function isJobOverview(value: unknown): value is JobOverview {
   if (!isRecord(value)) {
     return false;
   }
   const {
+    scope,
     statusCounts,
-    overdue,
-    dueNext24Hours,
-    completedLast7Days,
-    cancelledLast7Days,
+    workers,
+    collections,
+    shops,
     workload,
     recentActivity,
     generatedAt,
   } = value;
   return (
-    isRecord(statusCounts) &&
-    Object.values(JobStatus).every(status => isNumber(statusCounts[status])) &&
-    [overdue, dueNext24Hours, completedLast7Days, cancelledLast7Days].every(
-      isNumber,
-    ) &&
+    (scope === 'organization' || scope === 'team') &&
+    allNumbers(statusCounts, Object.values(JobStatus)) &&
+    allNumbers(value, [
+      'overdue',
+      'dueNext24Hours',
+      'awaitingVerification',
+      'completedLast7Days',
+      'cancelledLast7Days',
+      'failedLast7Days',
+    ]) &&
+    allNumbers(workers, ['total', 'busy', 'available', 'online']) &&
+    allNumbers(collections, [
+      'outstanding',
+      'dueToday',
+      'overdue',
+      'collectedToday',
+      'pendingVerification',
+    ]) &&
+    isRecord(collections) &&
+    isString(collections['currency']) &&
+    allNumbers(shops, ['total', 'visitedToday', 'pendingVisits']) &&
     isArrayOf(workload, isWorkload) &&
     isArrayOf(recentActivity, isActivity) &&
     isString(generatedAt)

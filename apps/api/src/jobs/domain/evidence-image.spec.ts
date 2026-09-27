@@ -96,8 +96,12 @@ describe('inspectImage — JPEG', () => {
     // SOI, JFIF, then the minimal orientation block, then the rest.
     expect(data.subarray(0, 2)).toEqual(SOI);
     expect(data.subarray(2, 2 + JFIF.length)).toEqual(JFIF);
-    const app1 = data.subarray(2 + JFIF.length, 2 + JFIF.length + 34);
-    expect(app1).toEqual(orientationSegment(6));
+    const expected = orientationSegment(6);
+    const app1 = data.subarray(
+      2 + JFIF.length,
+      2 + JFIF.length + expected.length,
+    );
+    expect(app1).toEqual(expected);
     // Pixel data untouched.
     expect(data.subarray(data.length - SCAN.length)).toEqual(SCAN);
   });

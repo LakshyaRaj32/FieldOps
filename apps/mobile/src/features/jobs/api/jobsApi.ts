@@ -3,22 +3,26 @@ import type {
   AssignJobRequest,
   CancelJobRequest,
   CreateJobRequest,
+  DeclineJobRequest,
   EvidenceContentType,
+  FailJobRequest,
   JobCommandRequest,
   JobDetail,
   JobOverview,
   JobPage,
   JobStatus,
+  JobType,
   JobWorkingSet,
+  RescheduleJobRequest,
   SendJobMessageRequest,
+  SubmitJobRequest,
   UpdateJobRequest,
+  VerifyJobRequest,
   WorkerSummary,
 } from '@fieldops/types';
 
-import type { FetchArgs } from '@reduxjs/toolkit/query/react';
-
 import { API_V1, baseApi } from '../../../services/api/baseApi';
-import { parseError, type AppError } from '../../../utils/errors';
+import { fetchChecked } from '../../../services/api/fetchChecked';
 import {
   isJobDetail,
   isJobOverview,
@@ -33,39 +37,14 @@ export interface JobListArgs {
   /** By scheduled time: `asc` = next first, `desc` = latest first. */
   readonly order: 'asc' | 'desc';
   readonly limit?: number;
+  readonly shopId?: string;
+  readonly types?: readonly JobType[];
 }
 
 const LIST = { type: 'Job', id: 'LIST' } as const;
 const jobTag = (id: string) => ({ type: 'Job', id } as const);
-
-type SendResult = {
-  readonly data?: unknown;
-  readonly error?: AppError | undefined;
-};
-/** The `baseQuery` RTK Query hands to `queryFn` (it may answer synchronously). */
-type SendRequest = (
-  args: string | FetchArgs,
-) => SendResult | PromiseLike<SendResult>;
-
-/**
- * Sends a request and checks the response body before it enters the cache. A body of the
- * wrong shape becomes a `parse` AppError: an ordinary failed request, so screens show their
- * error state and tags are still invalidated (throwing would skip both).
- */
-async function fetchChecked<T>(
-  send: SendRequest,
-  args: string | FetchArgs,
-  guard: (value: unknown) => value is T,
-  what: string,
-): Promise<{ data: T } | { error: AppError }> {
-  const result = await send(args);
-  if (result.error !== undefined) {
-    return { error: result.error };
-  }
-  return guard(result.data)
-    ? { data: result.data }
-    : { error: parseError(`Unexpected ${what} response`) };
-}
+/** A verification or rejection changes money: shop accounts and orders refresh. */
+const MONEY = ['ShopAccount', { type: 'Order', id: 'LIST' }] as const;
 
 /** A worker command as the sync engine sends it: the same key on every attempt. */
 export interface WorkerCommandArgs {
@@ -101,13 +80,26 @@ export const evidenceContentPath = (jobId: string, evidenceId: string) =>
  * it up to date.
  */
 export const jobsApi = baseApi
-  .enhanceEndpoints({ addTagTypes: ['Job', 'Worker'] })
+  .enhanceEndpoints({
+    addTagTypes: ['Job', 'Worker', 'ShopAccount', 'Order'],
+  })
   .injectEndpoints({
     endpoints: build => {
-      const command = (path: 'start' | 'complete') =>
+      /** A worker status command, sent by the sync engine with its stable key. */
+      const command = <Body extends object = JobCommandRequest>(
+        path:
+          | 'accept'
+          | 'decline'
+          | 'depart'
+          | 'arrive'
+          | 'start'
+          | 'complete'
+          | 'submit'
+          | 'fail',
+      ) =>
         build.mutation<
           JobDetail,
-          WorkerCommandArgs & { readonly request?: JobCommandRequest }
+          WorkerCommandArgs & { readonly request?: Body }
         >({
           queryFn: ({ id, idempotencyKey, request = {} }, _api, _extra, send) =>
             fetchChecked(
@@ -139,6 +131,12 @@ export const jobsApi = baseApi
                   status: queryArg.statuses.join(','),
                   order: queryArg.order,
                   limit: queryArg.limit ?? 20,
+                  ...(queryArg.shopId !== undefined && {
+                    shopId: queryArg.shopId,
+                  }),
+                  ...(queryArg.types !== undefined && {
+                    type: queryArg.types.join(','),
+                  }),
                   ...(pageParam !== null && { cursor: pageParam }),
                 },
               },
@@ -217,8 +215,67 @@ export const jobsApi = baseApi
           invalidatesTags: (_result, _error, { id }) => [jobTag(id), LIST],
         }),
 
+        acceptJob: command('accept'),
+        declineJob: command<DeclineJobRequest>('decline'),
+        departJob: command('depart'),
+        arriveJob: command('arrive'),
         startJob: command('start'),
         completeJob: command('complete'),
+        submitJob: command<SubmitJobRequest>('submit'),
+        failJob: command<FailJobRequest>('fail'),
+
+        /** Manager review and rescheduling (online). */
+        verifyJob: build.mutation<
+          JobDetail,
+          { readonly id: string } & VerifyJobRequest
+        >({
+          queryFn: ({ id, ...body }, _api, _extra, send) =>
+            fetchChecked(
+              send,
+              { url: `${API_V1}/jobs/${id}/verify`, method: 'POST', body },
+              isJobDetail,
+              'job verify',
+            ),
+          invalidatesTags: (_result, _error, { id }) => [
+            jobTag(id),
+            LIST,
+            ...MONEY,
+          ],
+        }),
+        rejectJob: build.mutation<
+          JobDetail,
+          { readonly id: string; readonly reason: string }
+        >({
+          queryFn: ({ id, reason }, _api, _extra, send) =>
+            fetchChecked(
+              send,
+              {
+                url: `${API_V1}/jobs/${id}/reject`,
+                method: 'POST',
+                body: { reason },
+              },
+              isJobDetail,
+              'job reject',
+            ),
+          invalidatesTags: (_result, _error, { id }) => [
+            jobTag(id),
+            LIST,
+            ...MONEY,
+          ],
+        }),
+        rescheduleJob: build.mutation<
+          JobDetail,
+          { readonly id: string } & RescheduleJobRequest
+        >({
+          queryFn: ({ id, ...body }, _api, _extra, send) =>
+            fetchChecked(
+              send,
+              { url: `${API_V1}/jobs/${id}/reschedule`, method: 'POST', body },
+              isJobDetail,
+              'job reschedule',
+            ),
+          invalidatesTags: (_result, _error, { id }) => [jobTag(id), LIST],
+        }),
 
         addJobNote: build.mutation<
           JobDetail,
@@ -355,4 +412,7 @@ export const {
   useCancelJobMutation,
   useListWorkersQuery,
   useSendJobMessageMutation,
+  useVerifyJobMutation,
+  useRejectJobMutation,
+  useRescheduleJobMutation,
 } = jobsApi;

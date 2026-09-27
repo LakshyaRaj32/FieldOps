@@ -68,17 +68,35 @@ describe('isJobDetail (Phase 4 fields)', () => {
 
 describe('isJobOverview', () => {
   const overview = {
+    scope: 'team',
     statusCounts: {
       PENDING: 1,
       ASSIGNED: 2,
+      ACCEPTED: 0,
+      EN_ROUTE: 1,
+      ARRIVED: 0,
       IN_PROGRESS: 1,
+      SUBMITTED: 1,
       COMPLETED: 5,
       CANCELLED: 0,
+      FAILED: 0,
     },
     overdue: 1,
     dueNext24Hours: 2,
+    awaitingVerification: 1,
     completedLast7Days: 5,
     cancelledLast7Days: 0,
+    failedLast7Days: 0,
+    workers: { total: 3, busy: 1, available: 2, online: 1 },
+    collections: {
+      currency: 'INR',
+      outstanding: 60_000_000,
+      dueToday: 0,
+      overdue: 20_000_000,
+      collectedToday: 20_000_000,
+      pendingVerification: 0,
+    },
+    shops: { total: 4, visitedToday: 1, pendingVisits: 2 },
     workload: [{ worker: WORKER, assigned: 2, inProgress: 1 }],
     recentActivity: [
       {
@@ -90,6 +108,7 @@ describe('isJobOverview', () => {
         toStatus: 'COMPLETED',
         actor: WORKER,
         assignee: null,
+        reason: null,
         createdAt: '2026-09-27T09:00:00.000Z',
       },
     ],
@@ -98,6 +117,13 @@ describe('isJobOverview', () => {
 
   it('accepts the dashboard figures', () => {
     expect(isJobOverview(overview)).toBe(true);
+    // Money figures are required: a dashboard never shows invented zeros.
+    expect(
+      isJobOverview({
+        ...overview,
+        collections: { ...overview.collections, outstanding: undefined },
+      }),
+    ).toBe(false);
     expect(
       isJobOverview({ ...overview, workload: [], recentActivity: [] }),
     ).toBe(true);

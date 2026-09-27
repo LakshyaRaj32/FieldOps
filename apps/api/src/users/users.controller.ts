@@ -1,13 +1,17 @@
 import { Controller, Get, HttpStatus, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
+import { AccessService } from '../access/access.service.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { Roles } from '../common/decorators/roles.decorator.js';
 import {
   ApiEnvelopeResponse,
   ApiErrorResponses,
 } from '../common/swagger/api-envelope.js';
+import { orgScope } from '../common/tenancy/scope.js';
+import type { AuthenticatedUser } from '../common/types/authenticated-user.js';
 import { ListUsersQueryDto } from './dto/list-users-query.dto.js';
-import { UserProfileDto } from './dto/user-profile.dto.js';
+import { MemberDto } from './dto/member.dto.js';
 import { WorkerSummaryDto } from './dto/worker-summary.dto.js';
 import { Role } from './role.js';
 import { UsersService } from './users.service.js';
@@ -19,37 +23,50 @@ const DEFAULT_WORKERS_LIMIT = 100;
 @ApiBearerAuth()
 @Controller('users')
 export class UsersController {
-  constructor(private readonly users: UsersService) {}
+  constructor(
+    private readonly users: UsersService,
+    private readonly access: AccessService,
+  ) {}
 
   /**
-   * Admin-only user list. Also the reference example of the role guard: workers and managers
-   * receive 403, unauthenticated callers 401.
+   * The organization's people (ORGANIZATION_ADMIN). Kept from Phase 1 for compatibility; the
+   * full member management API is /organization/members.
    */
   @Get()
-  @Roles(Role.ADMIN)
-  @ApiOperation({ summary: 'List users (ADMIN only)' })
-  @ApiEnvelopeResponse(UserProfileDto, {
-    description: 'Users, newest first.',
+  @Roles(Role.ORGANIZATION_ADMIN)
+  @ApiOperation({
+    summary: "List the organization's users (ORGANIZATION_ADMIN)",
+  })
+  @ApiEnvelopeResponse(MemberDto, {
+    description: 'Members of the caller’s organization.',
     isArray: true,
   })
   @ApiErrorResponses(
     { status: HttpStatus.UNAUTHORIZED, description: 'Not authenticated.' },
     { status: HttpStatus.FORBIDDEN, description: 'Caller is not an admin.' },
   )
-  async list(@Query() query: ListUsersQueryDto): Promise<UserProfileDto[]> {
-    const users = await this.users.list(query.limit ?? DEFAULT_LIMIT);
-    return users.map(user => UserProfileDto.fromUser(user));
+  async list(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ListUsersQueryDto,
+  ): Promise<MemberDto[]> {
+    const scope = orgScope(user);
+    const rows = await this.users.listMembers(scope.organizationId, {
+      limit: query.limit ?? DEFAULT_LIMIT,
+    });
+    return rows.map(row => MemberDto.from(row));
   }
 
   /**
-   * Workers a job can be assigned to. Managers need this to assign jobs but must not get the
-   * admin user list, so it returns only active WORKERs and only the fields needed to choose.
+   * Workers the caller can assign operations to: their team for a scoped manager, every
+   * active worker of the organization otherwise. Only the fields needed to choose.
    */
   @Get('workers')
-  @Roles(Role.MANAGER, Role.ADMIN)
-  @ApiOperation({ summary: 'List assignable workers (MANAGER, ADMIN)' })
+  @Roles(Role.MANAGER, Role.ORGANIZATION_ADMIN)
+  @ApiOperation({
+    summary: 'List assignable workers (MANAGER, ORGANIZATION_ADMIN)',
+  })
   @ApiEnvelopeResponse(WorkerSummaryDto, {
-    description: 'Active workers, by name.',
+    description: 'Active workers in the caller’s scope, by name.',
     isArray: true,
   })
   @ApiErrorResponses(
@@ -57,9 +74,13 @@ export class UsersController {
     { status: HttpStatus.FORBIDDEN, description: 'Caller is a worker.' },
   )
   async listWorkers(
+    @CurrentUser() user: AuthenticatedUser,
     @Query() query: ListUsersQueryDto,
   ): Promise<WorkerSummaryDto[]> {
+    const scope = orgScope(user);
     const workers = await this.users.listActiveWorkers(
+      scope.organizationId,
+      await this.access.workerFilter(scope),
       query.limit ?? DEFAULT_WORKERS_LIMIT,
     );
     return workers.map(worker => WorkerSummaryDto.fromUser(worker));

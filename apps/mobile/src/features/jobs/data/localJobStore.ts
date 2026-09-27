@@ -1,9 +1,12 @@
-import { nextStatus } from '@fieldops/shared';
+import { nextStatus, type JobTransition } from '@fieldops/shared';
+import { submissionProblems } from '@fieldops/shared/requirements';
 import type {
   DeviceLocation,
   JobDetail,
   JobStatus,
   JobWorkingSet,
+  Product,
+  SubmitJobRequest,
   UserSummary,
 } from '@fieldops/types';
 
@@ -17,6 +20,7 @@ import {
 } from '../../../services/db/database';
 import { uuidv7 } from '../../../utils/uuid';
 import { isJobDetail } from '../api/contracts';
+import { isProductList } from '../../catalog/api/contracts';
 import { projectJob } from './projection';
 import {
   LocalCommandError,
@@ -30,6 +34,7 @@ import {
   type OutboxError,
   type OutboxType,
   type StatusPayload,
+  type SubmitPayload,
 } from './types';
 
 /** Outbox statuses that still change what the worker sees. */
@@ -59,11 +64,56 @@ const PHASE_4_DEFAULTS = {
   messages: [],
 } as const;
 
+/**
+ * Fields added with operations (schema v3). A job stored before them is a GENERAL job; its
+ * responsible manager is its creator (the same backfill the server's migration made).
+ */
+const OPERATION_DEFAULTS = {
+  type: 'GENERAL',
+  shop: null,
+  expectedAmount: null,
+  order: null,
+  lines: [],
+  payments: [],
+  requiresPhoto: false,
+  submissionNote: null,
+  siteRadiusMeters: 300,
+  arrivalLocation: null,
+  acceptedAt: null,
+  arrivedAt: null,
+  submittedAt: null,
+  failedAt: null,
+  failureReason: null,
+} as const;
+
+function upgradeStoredJob(parsed: Record<string, unknown>): unknown {
+  const withFields: Record<string, unknown> = {
+    ...PHASE_4_DEFAULTS,
+    ...OPERATION_DEFAULTS,
+    ...parsed,
+  };
+  withFields['manager'] ??= parsed['createdBy'];
+  if (Array.isArray(parsed['checklist'])) {
+    withFields['checklist'] = parsed['checklist'].map((item: object) => ({
+      checked: null,
+      responseNote: null,
+      ...item,
+    }));
+  }
+  if (Array.isArray(parsed['history'])) {
+    withFields['history'] = parsed['history'].map((entry: object) => ({
+      reason: null,
+      ...entry,
+    }));
+  }
+  return withFields;
+}
+
 function parseJob(json: string): JobDetail {
   const parsed: unknown = JSON.parse(json);
   const value =
     typeof parsed === 'object' && parsed !== null
-      ? { ...PHASE_4_DEFAULTS, ...parsed }
+      ? upgradeStoredJob(parsed as Record<string, unknown>)
       : parsed;
   if (!isJobDetail(value)) {
     throw new Error('Stored job does not match the job contract');
@@ -71,16 +121,37 @@ function parseJob(json: string): JobDetail {
   return value;
 }
 
+/** sync_state key of the catalog kept for offline order collections. */
+const CATALOG_KEY = 'catalog';
+
+/** What each worker status command is called in "This job can't be … now". */
+const STEP_NAMES: Readonly<Record<string, string>> = {
+  accept: 'accepted',
+  decline: 'handed back',
+  depart: 'started on',
+  arrive: 'marked as arrived',
+  start: 'started',
+  complete: 'completed',
+  submit: 'submitted',
+  fail: 'reported as failed',
+};
+
 /** The stored payload of an entry, typed by its command. */
 function toCommand(type: OutboxType, payload: string | null): OutboxCommand {
   const value: unknown = payload === null ? null : JSON.parse(payload);
   switch (type) {
+    case 'job.accept':
+    case 'job.depart':
+    case 'job.arrive':
     case 'job.start':
     case 'job.complete':
       return {
         type,
         payload: value === null ? null : (value as StatusPayload),
       } as OutboxCommand;
+    case 'job.decline':
+    case 'job.fail':
+    case 'job.submit':
     case 'job.note.add':
     case 'job.evidence.add':
     case 'job.message.send':
@@ -290,6 +361,16 @@ export class LocalJobStore {
     });
   }
 
+  /** The active catalog the server sent with the working set (for order collections). */
+  async getCatalog(): Promise<Product[]> {
+    const json = await this.getMeta(CATALOG_KEY);
+    if (json === null) {
+      return [];
+    }
+    const parsed: unknown = JSON.parse(json);
+    return isProductList(parsed) ? parsed : [];
+  }
+
   async getMeta(key: string): Promise<string | null> {
     const [row] = await this.db.all(
       'SELECT value FROM sync_state WHERE key = ?',
@@ -299,6 +380,49 @@ export class LocalJobStore {
   }
 
   // ---- Local commands (work offline) -------------------------------------------------
+
+  /** The worker accepts an assigned operation (field lifecycle). */
+  acceptJob(jobId: string): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.accept', payload: { location: null } },
+      allowed('accept'),
+    );
+  }
+
+  /** The worker hands an operation back, with a reason for the manager. */
+  declineJob(jobId: string, reason: string): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      {
+        type: 'job.decline',
+        payload: { reason: reason.trim(), location: null },
+      },
+      allowed('decline'),
+    );
+  }
+
+  departJob(
+    jobId: string,
+    location: DeviceLocation | null = null,
+  ): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.depart', payload: { location } },
+      allowed('depart'),
+    );
+  }
+
+  arriveJob(
+    jobId: string,
+    location: DeviceLocation | null = null,
+  ): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.arrive', payload: { location } },
+      allowed('arrive'),
+    );
+  }
 
   /**
    * The worker starts the job, with their position if the phone had one. Committed locally;
@@ -311,14 +435,7 @@ export class LocalJobStore {
     return this.command(
       jobId,
       { type: 'job.start', payload: { location } },
-      job => {
-        if (nextStatus(job.status, 'start') === undefined) {
-          throw new LocalCommandError(
-            'INVALID_STATUS_TRANSITION',
-            'This job can no longer be started.',
-          );
-        }
-      },
+      allowed('start'),
     );
   }
 
@@ -329,11 +446,54 @@ export class LocalJobStore {
     return this.command(
       jobId,
       { type: 'job.complete', payload: { location } },
+      allowed('complete'),
+    );
+  }
+
+  /** The worker cannot carry the operation out. */
+  failJob(
+    jobId: string,
+    reason: string,
+    location: DeviceLocation | null = null,
+  ): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.fail', payload: { reason: reason.trim(), location } },
+      allowed('fail'),
+    );
+  }
+
+  /**
+   * The worker's result. Checked here with the same requirements the server applies (photos
+   * waiting to upload count: the outbox sends them before the submission), so a submission
+   * that would be refused is never queued. `productNames` names new order lines offline.
+   */
+  submitJob(
+    jobId: string,
+    request: Omit<SubmitJobRequest, 'location'>,
+    location: DeviceLocation | null = null,
+    productNames: SubmitPayload['productNames'] = {},
+  ): Promise<OutboxEntry> {
+    return this.command(
+      jobId,
+      { type: 'job.submit', payload: { request, location, productNames } },
       job => {
-        if (nextStatus(job.status, 'complete') === undefined) {
+        allowed('submit')(job);
+        const problems = submissionProblems(
+          {
+            type: job.type,
+            requiresPhoto: job.requiresPhoto,
+            photoCount: job.evidence.length,
+            checklist: job.checklist,
+            lines: job.lines,
+            expectedAmount: job.expectedAmount,
+          },
+          request,
+        );
+        if (problems.length > 0) {
           throw new LocalCommandError(
-            'INVALID_STATUS_TRANSITION',
-            'Only a job in progress can be completed.',
+            'REQUIREMENTS_NOT_MET',
+            problems.map(problem => problem.message).join(' '),
           );
         }
       },
@@ -587,6 +747,7 @@ export class LocalJobStore {
         }
       }
       this.setMeta(tx, 'last_pull_at', set.generatedAt);
+      this.setMeta(tx, CATALOG_KEY, JSON.stringify(set.products));
     });
   }
 
@@ -671,4 +832,16 @@ export class LocalJobStore {
       [JSON.stringify(local), local.status, local.scheduledAt, jobId],
     );
   }
+}
+
+/** Refuses a status command the job's lifecycle does not allow now. */
+function allowed(transition: JobTransition): (job: JobDetail) => void {
+  return job => {
+    if (nextStatus(job.type, job.status, transition) === undefined) {
+      throw new LocalCommandError(
+        'INVALID_STATUS_TRANSITION',
+        `This job can't be ${STEP_NAMES[transition] ?? transition} now.`,
+      );
+    }
+  };
 }

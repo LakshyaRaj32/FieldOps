@@ -6,7 +6,6 @@ import { UsersModule } from '../users/users.module.js';
 import { AuthController } from './auth.controller.js';
 import { AccessTokenVerifier } from './access-token-verifier.js';
 import { AuthService } from './auth.service.js';
-import { PasswordService } from './password.service.js';
 import { SessionsService } from './sessions.service.js';
 import { JwtStrategy } from './strategies/jwt.strategy.js';
 import { TokensService } from './tokens.service.js';
@@ -22,7 +21,6 @@ import { TokensService } from './tokens.service.js';
   controllers: [AuthController],
   providers: [
     AuthService,
-    PasswordService,
     TokensService,
     SessionsService,
     JwtStrategy,

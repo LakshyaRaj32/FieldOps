@@ -17,9 +17,18 @@ export type JobChange =
   /** Sent only to a worker a job was taken away from (reassigned): it leaves their device. */
   | 'unassigned'
   | 'updated'
+  | 'accepted'
+  | 'declined'
+  | 'departed'
+  | 'arrived'
   | 'started'
+  | 'submitted'
+  | 'verified'
+  | 'rejected'
   | 'completed'
+  | 'failed'
   | 'cancelled'
+  | 'rescheduled'
   | 'note'
   | 'evidence';
 
@@ -75,4 +84,5 @@ export type RealtimeRefusal =
   | 'ACCESS_TOKEN_INVALID'
   | 'SESSION_REVOKED'
   | 'SESSION_EXPIRED'
-  | 'ACCOUNT_DISABLED';
+  | 'ACCOUNT_DISABLED'
+  | 'ORGANIZATION_SUSPENDED';

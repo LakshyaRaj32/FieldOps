@@ -13,6 +13,7 @@ import { LocalCommandError } from './types';
 
 const snapshot = (...jobs: ReturnType<typeof serverJob>[]) => ({
   jobs,
+  products: [],
   generatedAt: '2026-09-27T08:00:00.000Z',
 });
 

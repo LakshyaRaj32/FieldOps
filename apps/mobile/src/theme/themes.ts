@@ -54,6 +54,8 @@ export interface ChartColors {
   readonly pending: string;
   readonly assigned: string;
   readonly inProgress: string;
+  /** Submitted results waiting for verification. */
+  readonly submitted: string;
   readonly completed: string;
   readonly cancelled: string;
 }
@@ -133,6 +135,7 @@ const lightChart: ChartColors = {
   pending: '#B06A00',
   assigned: '#0A8F80',
   inProgress: '#2F5BEA',
+  submitted: '#7A4DD8',
   completed: '#1D7A4C',
   cancelled: '#A3ADBD',
 };
@@ -141,6 +144,7 @@ const darkChart: ChartColors = {
   pending: '#C4862A',
   assigned: '#26A091',
   inProgress: '#6384EE',
+  submitted: '#A083EC',
   completed: '#3F9A60',
   cancelled: '#566275',
 };

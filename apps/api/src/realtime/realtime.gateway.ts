@@ -11,12 +11,10 @@ import type { Server, Socket } from 'socket.io';
 import { v7 as uuidv7 } from 'uuid';
 
 import { AccessTokenVerifier } from '../auth/access-token-verifier.js';
-import {
-  AppException,
-  AuthErrors,
-} from '../common/errors/app-exception.js';
+import { AppException, AuthErrors } from '../common/errors/app-exception.js';
 import type { AuthenticatedUser } from '../common/types/authenticated-user.js';
 import { DomainEvents } from '../events/domain-events.js';
+import { PresenceService } from './presence.service.js';
 import {
   jobChangedDeliveries,
   messageDeliveries,
@@ -43,6 +41,7 @@ const REFUSALS: readonly RealtimeRefusal[] = [
   'SESSION_REVOKED',
   'SESSION_EXPIRED',
   'ACCOUNT_DISABLED',
+  'ORGANIZATION_SUSPENDED',
 ];
 
 /** The error a refused handshake reports to the client (`connect_error`). */
@@ -83,7 +82,10 @@ export class RealtimeGateway
     OnModuleDestroy
 {
   private readonly logger = new Logger(RealtimeGateway.name);
-  private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly expiryTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private readonly subscriptions: (() => void)[] = [];
 
   @WebSocketServer()
@@ -92,6 +94,7 @@ export class RealtimeGateway
   constructor(
     private readonly verifier: AccessTokenVerifier,
     private readonly events: DomainEvents,
+    private readonly presence: PresenceService,
   ) {}
 
   afterInit(server: Server): void {
@@ -122,6 +125,7 @@ export class RealtimeGateway
       return;
     }
     void socket.join(roomsFor(data.user));
+    this.presence.connected(data.user.userId);
     const timer = setTimeout(
       () => socket.disconnect(true),
       Math.max(0, data.expiresAt - Date.now()),
@@ -131,6 +135,10 @@ export class RealtimeGateway
   }
 
   handleDisconnect(socket: Socket): void {
+    const data = socket.data as Partial<SocketData>;
+    if (data.user !== undefined && data.expiresAt !== undefined) {
+      this.presence.disconnected(data.user.userId);
+    }
     const timer = this.expiryTimers.get(socket.id);
     if (timer !== undefined) {
       clearTimeout(timer);

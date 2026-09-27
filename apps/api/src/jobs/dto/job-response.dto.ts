@@ -6,15 +6,22 @@ import type {
   JobDetail,
   JobEvidence,
   JobHistoryEntry,
+  JobLine,
   JobMessage,
   JobNote,
+  JobOrder,
   JobPage,
-  JobWorkingSet,
+  JobShop,
   JobSummary,
-  UserSummary,
+  JobWorkingSet,
+  Product,
 } from '@fieldops/types';
 
+import { UserSummaryDto } from '../../common/dto/user-summary.dto.js';
+import { toAmountOrNull } from '../../common/money.js';
 import type { AuthenticatedUser } from '../../common/types/authenticated-user.js';
+import { ProductDto } from '../../catalog/dto/product.dto.js';
+import { PaymentRecordDto } from '../../shops/dto/order.dto.js';
 import type {
   JobDetailRecord,
   JobSummaryRecord,
@@ -25,67 +32,84 @@ import {
   JobEventType,
   JobPriority,
   JobStatus,
+  JobType,
 } from '../job-enums.js';
 import { GeoPointDto } from './job-fields.js';
 
-type UserRow = { id: string; firstName: string; lastName: string };
+export { UserSummaryDto };
 
 const iso = (date: Date | null): string | null => date?.toISOString() ?? null;
 
-export class UserSummaryDto implements UserSummary {
-  @ApiProperty({ format: 'uuid' })
-  readonly id: string;
-
-  @ApiProperty({ example: 'Asha' })
-  readonly firstName: string;
-
-  @ApiProperty({ example: 'Verma' })
-  readonly lastName: string;
-
-  static from(user: UserRow): UserSummaryDto {
-    return Object.assign(new UserSummaryDto(), {
-      id: user.id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-    });
-  }
+export class JobChecklistItemDto implements JobChecklistItem {
+  @ApiProperty({ format: 'uuid' }) readonly id: string;
+  @ApiProperty({ example: 0 }) readonly position: number;
+  @ApiProperty({ example: 'Is the display correct?' }) readonly label: string;
+  @ApiProperty({ type: Boolean, nullable: true }) readonly checked:
+    boolean | null;
+  @ApiProperty({ type: String, nullable: true }) readonly responseNote:
+    string | null;
 }
 
-export class JobChecklistItemDto implements JobChecklistItem {
-  @ApiProperty({ format: 'uuid' })
-  readonly id: string;
+export class JobShopDto implements JobShop {
+  @ApiProperty({ format: 'uuid' }) readonly id: string;
+  @ApiProperty({ example: 'Nike Chandigarh' }) readonly name: string;
+  @ApiProperty({ type: String, nullable: true }) readonly ownerName:
+    string | null;
+  @ApiProperty({ type: String, nullable: true }) readonly phone: string | null;
+  @ApiProperty() readonly address: string;
+}
 
-  @ApiProperty({ example: 0 })
-  readonly position: number;
+export class JobOrderDto implements JobOrder {
+  @ApiProperty({ format: 'uuid' }) readonly id: string;
+  @ApiProperty({ example: 'ORD-1001' }) readonly orderNumber: string;
+}
 
-  @ApiProperty({ example: 'Clean filters' })
-  readonly label: string;
+export class JobLineDto implements JobLine {
+  @ApiProperty({ format: 'uuid' }) readonly id: string;
+  @ApiProperty() readonly position: number;
+  @ApiProperty({ format: 'uuid' }) readonly productId: string;
+  @ApiProperty() readonly productName: string;
+  @ApiProperty() readonly sku: string;
+  @ApiProperty({ type: Number, nullable: true })
+  readonly expectedQuantity: number | null;
+  @ApiProperty({ type: Number, nullable: true }) readonly quantity:
+    number | null;
 }
 
 export class JobSummaryDto implements JobSummary {
-  @ApiProperty({ format: 'uuid' })
-  readonly id: string;
+  @ApiProperty({ format: 'uuid' }) readonly id: string;
 
-  @ApiProperty({ example: 'AC repair' })
-  readonly title: string;
+  @ApiProperty({ enum: Object.values(JobType) }) readonly type: JobType;
 
-  @ApiProperty({ example: 'ABC Ltd' })
-  readonly customerName: string;
+  @ApiProperty({ example: 'Collect September dues' }) readonly title: string;
 
-  @ApiProperty({ example: '12 MG Road, Bengaluru 560001' })
+  @ApiProperty({ example: 'Nike Chandigarh' }) readonly customerName: string;
+
+  @ApiProperty({ example: 'SCO 12, Sector 17, Chandigarh' })
   readonly address: string;
 
-  @ApiProperty({ format: 'date-time' })
-  readonly scheduledAt: string;
+  @ApiProperty({ format: 'date-time' }) readonly scheduledAt: string;
 
   @ApiProperty({ enum: Object.values(JobPriority) })
   readonly priority: JobPriority;
 
-  @ApiProperty({ enum: Object.values(JobStatus) })
-  readonly status: JobStatus;
+  @ApiProperty({ enum: Object.values(JobStatus) }) readonly status: JobStatus;
 
   @ApiProperty({ type: UserSummaryDto, nullable: true })
   readonly assignedWorker: UserSummaryDto | null;
+
+  @ApiProperty({ type: UserSummaryDto }) readonly manager: UserSummaryDto;
+
+  @ApiProperty({ type: JobShopDto, nullable: true })
+  readonly shop: JobShopDto | null;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    description:
+      'PAYMENT_COLLECTION: minor units to collect (set by the manager).',
+  })
+  readonly expectedAmount: number | null;
 
   @ApiProperty({
     example: 2,
@@ -93,13 +117,12 @@ export class JobSummaryDto implements JobSummary {
   })
   readonly version: number;
 
-  @ApiProperty({ format: 'date-time' })
-  readonly updatedAt: string;
+  @ApiProperty({ format: 'date-time' }) readonly updatedAt: string;
 
   @ApiProperty({
     enum: Object.values(JobAction),
     isArray: true,
-    example: ['start'],
+    example: ['accept', 'message', 'decline'],
     description:
       'What the signed-in user may do with this job right now. Clients show exactly these.',
   })
@@ -116,6 +139,7 @@ function summaryFields(
 ): JobSummary {
   return {
     id: job.id,
+    type: job.type,
     title: job.title,
     customerName: job.customerName,
     address: job.address,
@@ -126,6 +150,9 @@ function summaryFields(
       job.assignedWorker === null
         ? null
         : UserSummaryDto.from(job.assignedWorker),
+    manager: UserSummaryDto.from(job.manager),
+    shop: job.shop,
+    expectedAmount: toAmountOrNull(job.expectedAmount),
     version: job.version,
     updatedAt: job.updatedAt.toISOString(),
     allowedActions: allowedActions(user, job),
@@ -133,44 +160,29 @@ function summaryFields(
 }
 
 export class JobHistoryEntryDto implements JobHistoryEntry {
-  @ApiProperty({ format: 'uuid' })
-  readonly id: string;
-
+  @ApiProperty({ format: 'uuid' }) readonly id: string;
   @ApiProperty({ enum: Object.values(JobEventType) })
   readonly type: JobEventType;
-
   @ApiProperty({ enum: Object.values(JobStatus), nullable: true })
   readonly fromStatus: JobStatus | null;
-
-  @ApiProperty({ enum: Object.values(JobStatus) })
-  readonly toStatus: JobStatus;
-
-  @ApiProperty({ type: UserSummaryDto })
-  readonly actor: UserSummaryDto;
-
+  @ApiProperty({ enum: Object.values(JobStatus) }) readonly toStatus: JobStatus;
+  @ApiProperty({ type: UserSummaryDto }) readonly actor: UserSummaryDto;
   @ApiProperty({ type: UserSummaryDto, nullable: true })
   readonly assignee: UserSummaryDto | null;
-
-  @ApiProperty({ format: 'date-time' })
-  readonly createdAt: string;
+  @ApiProperty({ type: String, nullable: true }) readonly reason: string | null;
+  @ApiProperty({ format: 'date-time' }) readonly createdAt: string;
 }
 
 export class JobNoteDto implements JobNote {
-  @ApiProperty({ format: 'uuid' })
-  readonly id: string;
-
-  @ApiProperty({ example: 'Compressor replaced.' })
+  @ApiProperty({ format: 'uuid' }) readonly id: string;
+  @ApiProperty({ example: 'Owner asked to come back after 5 pm.' })
   readonly body: string;
-
-  @ApiProperty({ type: UserSummaryDto })
-  readonly author: UserSummaryDto;
-
+  @ApiProperty({ type: UserSummaryDto }) readonly author: UserSummaryDto;
   @ApiProperty({
     format: 'date-time',
     description: 'Device time of capture (informational).',
   })
   readonly occurredAt: string;
-
   @ApiProperty({
     format: 'date-time',
     description: 'Server receipt time (authoritative order).',
@@ -179,21 +191,15 @@ export class JobNoteDto implements JobNote {
 }
 
 export class ActionLocationDto implements ActionLocation {
-  @ApiProperty({ example: 12.9716 })
-  readonly latitude: number;
-
-  @ApiProperty({ example: 77.5946 })
-  readonly longitude: number;
-
+  @ApiProperty({ example: 30.7333 }) readonly latitude: number;
+  @ApiProperty({ example: 76.7794 }) readonly longitude: number;
   @ApiProperty({ example: 12.5, description: 'Reported accuracy in meters.' })
   readonly accuracyMeters: number;
-
   @ApiProperty({
     format: 'date-time',
     description: 'Device time of the fix (informational).',
   })
   readonly capturedAt: string;
-
   @ApiProperty({
     type: Number,
     nullable: true,
@@ -205,63 +211,45 @@ export class ActionLocationDto implements ActionLocation {
 }
 
 export class JobEvidenceDto implements JobEvidence {
-  @ApiProperty({ format: 'uuid' })
-  readonly id: string;
-
+  @ApiProperty({ format: 'uuid' }) readonly id: string;
   @ApiProperty({ enum: ['image/jpeg', 'image/png'] })
   readonly contentType: EvidenceContentType;
-
-  @ApiProperty({ example: 412_345 })
-  readonly sizeBytes: number;
-
-  @ApiProperty({ example: 1920 })
-  readonly width: number;
-
-  @ApiProperty({ example: 1440 })
-  readonly height: number;
-
-  @ApiProperty({ type: UserSummaryDto })
-  readonly uploadedBy: UserSummaryDto;
-
+  @ApiProperty({ example: 412_345 }) readonly sizeBytes: number;
+  @ApiProperty({ example: 1920 }) readonly width: number;
+  @ApiProperty({ example: 1440 }) readonly height: number;
+  @ApiProperty({ type: UserSummaryDto }) readonly uploadedBy: UserSummaryDto;
   @ApiProperty({
     format: 'date-time',
     description: 'Device time of capture (informational).',
   })
   readonly capturedAt: string;
-
   @ApiProperty({ format: 'date-time', description: 'Server receipt time.' })
   readonly createdAt: string;
 }
 
 export class JobMessageDto implements JobMessage {
-  @ApiProperty({ format: 'uuid' })
-  readonly id: string;
-
-  @ApiProperty({ example: 'On my way, 10 minutes.' })
+  @ApiProperty({ format: 'uuid' }) readonly id: string;
+  @ApiProperty({ example: 'Reached the shop; owner is in a meeting.' })
   readonly body: string;
-
-  @ApiProperty({ type: UserSummaryDto })
-  readonly author: UserSummaryDto;
-
+  @ApiProperty({ type: UserSummaryDto }) readonly author: UserSummaryDto;
   @ApiProperty({
     format: 'date-time',
     description: 'Device time (informational).',
   })
   readonly occurredAt: string;
-
   @ApiProperty({ format: 'date-time', description: 'Server receipt time.' })
   readonly createdAt: string;
 }
 
 type EventRow = JobDetailRecord['events'][number];
 
-/** The location of the latest event of `type` that has one. */
+/** The location of the latest event of one of `types` that has one. */
 function locationOf(
   events: readonly EventRow[],
-  type: 'STARTED' | 'COMPLETED',
+  types: readonly EventRow['type'][],
 ): ActionLocation | null {
   const event = events.findLast(
-    row => row.type === type && row.latitude !== null,
+    row => types.includes(row.type) && row.latitude !== null,
   );
   if (
     event === undefined ||
@@ -282,58 +270,61 @@ function locationOf(
 }
 
 export class JobDetailDto extends JobSummaryDto implements JobDetail {
-  @ApiProperty({ type: String, nullable: true })
-  readonly description: string | null;
-
+  @ApiProperty({ type: String, nullable: true }) readonly description:
+    string | null;
   @ApiProperty({ type: GeoPointDto, nullable: true })
   readonly location: GeoPointDto | null;
-
-  @ApiProperty({ type: String, nullable: true })
-  readonly notes: string | null;
-
+  @ApiProperty({ type: String, nullable: true }) readonly notes: string | null;
   @ApiProperty({ type: [JobChecklistItemDto] })
   readonly checklist: JobChecklistItemDto[];
-
   @ApiProperty({ type: String, nullable: true })
   readonly cancellationReason: string | null;
-
-  @ApiProperty({ type: UserSummaryDto })
-  readonly createdBy: UserSummaryDto;
-
-  @ApiProperty({ format: 'date-time' })
-  readonly createdAt: string;
-
+  @ApiProperty({ type: UserSummaryDto }) readonly createdBy: UserSummaryDto;
+  @ApiProperty({ format: 'date-time' }) readonly createdAt: string;
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  readonly acceptedAt: string | null;
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  readonly arrivedAt: string | null;
   @ApiProperty({ type: String, format: 'date-time', nullable: true })
   readonly startedAt: string | null;
-
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  readonly submittedAt: string | null;
   @ApiProperty({ type: String, format: 'date-time', nullable: true })
   readonly completedAt: string | null;
-
   @ApiProperty({ type: String, format: 'date-time', nullable: true })
   readonly cancelledAt: string | null;
-
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  readonly failedAt: string | null;
+  @ApiProperty({ type: String, nullable: true }) readonly failureReason:
+    string | null;
+  @ApiProperty({ type: JobOrderDto, nullable: true })
+  readonly order: JobOrderDto | null;
+  @ApiProperty({ type: [JobLineDto] }) readonly lines: JobLineDto[];
+  @ApiProperty({ type: [PaymentRecordDto] })
+  readonly payments: PaymentRecordDto[];
+  @ApiProperty() readonly requiresPhoto: boolean;
+  @ApiProperty({ type: String, nullable: true }) readonly submissionNote:
+    string | null;
+  @ApiProperty({ example: 300 }) readonly siteRadiusMeters: number;
   @ApiProperty({ type: [JobHistoryEntryDto], description: 'Oldest first.' })
   readonly history: JobHistoryEntryDto[];
-
   @ApiProperty({
     type: [JobNoteDto],
     description: 'Worker field notes, in the order the server received them.',
   })
   readonly fieldNotes: JobNoteDto[];
-
+  @ApiProperty({ type: ActionLocationDto, nullable: true })
+  readonly arrivalLocation: ActionLocationDto | null;
   @ApiProperty({ type: ActionLocationDto, nullable: true })
   readonly startLocation: ActionLocationDto | null;
-
   @ApiProperty({ type: ActionLocationDto, nullable: true })
   readonly completeLocation: ActionLocationDto | null;
-
   @ApiProperty({
     type: [JobEvidenceDto],
     description:
       'Photos, oldest first. Download one with GET /jobs/{id}/evidence/{evidenceId}/content.',
   })
   readonly evidence: JobEvidenceDto[];
-
   @ApiProperty({
     type: [JobMessageDto],
     description: 'The latest messages (at most 100), oldest first.',
@@ -356,13 +347,34 @@ export class JobDetailDto extends JobSummaryDto implements JobDetail {
         id: item.id,
         position: item.position,
         label: item.label,
+        checked: item.checked,
+        responseNote: item.responseNote,
       })),
       cancellationReason: job.cancellationReason,
       createdBy: UserSummaryDto.from(job.createdBy),
       createdAt: job.createdAt.toISOString(),
+      acceptedAt: iso(job.acceptedAt),
+      arrivedAt: iso(job.arrivedAt),
       startedAt: iso(job.startedAt),
+      submittedAt: iso(job.submittedAt),
       completedAt: iso(job.completedAt),
       cancelledAt: iso(job.cancelledAt),
+      failedAt: iso(job.failedAt),
+      failureReason: job.failureReason,
+      order: job.order,
+      lines: job.lines.map(line => ({
+        id: line.id,
+        position: line.position,
+        productId: line.productId,
+        productName: line.productName,
+        sku: line.sku,
+        expectedQuantity: line.expectedQuantity,
+        quantity: line.quantity,
+      })),
+      payments: job.payments.map(payment => PaymentRecordDto.from(payment)),
+      requiresPhoto: job.requiresPhoto,
+      submissionNote: job.submissionNote,
+      siteRadiusMeters: job.organization.arrivalRadiusMeters,
       history: job.events.map(event => ({
         id: event.id,
         type: event.type,
@@ -371,6 +383,7 @@ export class JobDetailDto extends JobSummaryDto implements JobDetail {
         actor: UserSummaryDto.from(event.actor),
         assignee:
           event.assignee === null ? null : UserSummaryDto.from(event.assignee),
+        reason: event.reason,
         createdAt: event.createdAt.toISOString(),
       })),
       fieldNotes: job.fieldNotes.map(note => ({
@@ -380,8 +393,12 @@ export class JobDetailDto extends JobSummaryDto implements JobDetail {
         occurredAt: note.occurredAt.toISOString(),
         createdAt: note.createdAt.toISOString(),
       })),
-      startLocation: locationOf(job.events, 'STARTED'),
-      completeLocation: locationOf(job.events, 'COMPLETED'),
+      arrivalLocation: locationOf(job.events, [JobEventType.ARRIVED]),
+      startLocation: locationOf(job.events, [JobEventType.STARTED]),
+      completeLocation: locationOf(job.events, [
+        JobEventType.COMPLETED,
+        JobEventType.SUBMITTED,
+      ]),
       evidence: job.evidence.map(item => ({
         id: item.id,
         contentType: item.contentType as EvidenceContentType,
@@ -407,8 +424,7 @@ export class JobDetailDto extends JobSummaryDto implements JobDetail {
 }
 
 export class JobPageDto implements JobPage {
-  @ApiProperty({ type: [JobSummaryDto] })
-  readonly items: JobSummaryDto[];
+  @ApiProperty({ type: [JobSummaryDto] }) readonly items: JobSummaryDto[];
 
   @ApiProperty({
     type: String,
@@ -426,6 +442,12 @@ export class JobWorkingSetDto implements JobWorkingSet {
   })
   readonly jobs: JobDetailDto[];
 
-  @ApiProperty({ format: 'date-time' })
-  readonly generatedAt: string;
+  @ApiProperty({
+    type: [ProductDto],
+    description:
+      'The active catalog, while the worker has an open order collection (else empty).',
+  })
+  readonly products: Product[];
+
+  @ApiProperty({ format: 'date-time' }) readonly generatedAt: string;
 }

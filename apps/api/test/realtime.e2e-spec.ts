@@ -10,9 +10,12 @@ import { io, type Socket } from 'socket.io-client';
 import {
   createTestApp,
   eventually,
+  joinOrganization,
   resetDatabase,
   type TestApp,
 } from './helpers/test-app.js';
+
+type JoinRole = Parameters<typeof joinOrganization>[2];
 
 /**
  * The realtime channel end to end: a real Socket.IO client against the listening app.
@@ -56,9 +59,10 @@ describe('Realtime (e2e)', () => {
         lastName: 'Test',
       });
     const { user, tokens } = (response.body as { data: AuthResult }).data;
-    if (role !== 'WORKER') {
-      await t.prisma.user.update({ where: { id: user.id }, data: { role } });
-    }
+    // Phase 2-4 semantics: one manager runs the whole organization.
+    await joinOrganization(t.prisma, user.id, role as JoinRole, undefined, {
+      organizationWideAccess: role === 'MANAGER',
+    });
     return { id: user.id, token: tokens.accessToken };
   }
 

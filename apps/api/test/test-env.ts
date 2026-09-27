@@ -20,4 +20,6 @@ export const TEST_ENV = {
   STORAGE_DIR: './test-storage',
   // Push goes to a recording fake in tests (test/helpers/test-app.ts).
   FCM_SERVICE_ACCOUNT_FILE: '',
+  // The overdue scan is run explicitly by the tests that need it.
+  OVERDUE_SCAN_INTERVAL: 'off',
 } as const;

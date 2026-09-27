@@ -15,7 +15,11 @@ import {
   RETRY_POLICY,
   type RetryPolicy,
 } from './retryPolicy';
-import type { OutboxEntry } from './types';
+import {
+  STATUS_COMMANDS,
+  type OutboxEntry,
+  type WorkerStatusAction,
+} from './types';
 
 export type TransportResult<Data> =
   | { readonly data: Data }
@@ -26,15 +30,15 @@ export type TransportResult<Data> =
  * token refresh, error mapping); tests use a fake server with fault injection.
  */
 export interface JobSyncTransport {
-  startJob(
+  /**
+   * A status command (POST /jobs/:id/<action>): accept, decline, depart, arrive, start,
+   * complete, submit or fail, with its body (location, reason, the submission).
+   */
+  workerCommand(
+    action: WorkerStatusAction,
     jobId: string,
     mutationId: string,
-    request: JobCommandRequest,
-  ): Promise<TransportResult<JobDetail>>;
-  completeJob(
-    jobId: string,
-    mutationId: string,
-    request: JobCommandRequest,
+    body: object,
   ): Promise<TransportResult<JobDetail>>;
   addNote(
     jobId: string,
@@ -332,18 +336,45 @@ export class JobSyncEngine {
   }
 
   private send(entry: OutboxEntry): Promise<TransportResult<JobDetail>> {
+    const action = STATUS_COMMANDS[entry.type];
     switch (entry.type) {
+      case 'job.accept':
+      case 'job.depart':
+      case 'job.arrive':
       case 'job.start':
-        return this.transport.startJob(
+      case 'job.complete':
+        return this.transport.workerCommand(
+          action!,
           entry.jobId,
           entry.mutationId,
           withLocation(entry.payload?.location ?? null),
         );
-      case 'job.complete':
-        return this.transport.completeJob(
+      case 'job.decline':
+        return this.transport.workerCommand(
+          'decline',
           entry.jobId,
           entry.mutationId,
-          withLocation(entry.payload?.location ?? null),
+          { reason: entry.payload.reason },
+        );
+      case 'job.fail':
+        return this.transport.workerCommand(
+          'fail',
+          entry.jobId,
+          entry.mutationId,
+          {
+            reason: entry.payload.reason,
+            ...withLocation(entry.payload.location),
+          },
+        );
+      case 'job.submit':
+        return this.transport.workerCommand(
+          'submit',
+          entry.jobId,
+          entry.mutationId,
+          {
+            ...entry.payload.request,
+            ...withLocation(entry.payload.location),
+          },
         );
       case 'job.note.add':
         return this.transport.addNote(entry.jobId, entry.mutationId, {
