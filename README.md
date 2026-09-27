@@ -185,6 +185,7 @@ Building APKs, API environments, testing and troubleshooting:
 | [ai-architecture.md](docs/ai-architecture.md) | Controlled AI tools, safety, evaluation |
 | [development.md](docs/development.md) | Local setup, workspaces, git workflow, Windows notes |
 | [master-development-plan.md](docs/master-development-plan.md) | The six-phase plan |
+| [business-domain.md](docs/business-domain.md) | Organizations, roles and scopes, tenant isolation, money rules, operation types and state machine, audit |
 | [phase-status.md](docs/phase-status.md) | Current phase, what was built, decisions, known issues, verification |
 | [roadmap.md](docs/roadmap.md) | The former V0–V19 breakdown and the V0–V2 checklists |
 
@@ -192,9 +193,10 @@ Building APKs, API environments, testing and troubleshooting:
 
 | Role | Summary |
 | --- | --- |
-| `WORKER` | Performs assigned jobs, captures evidence, shares location while on duty |
-| `MANAGER` | Creates, assigns and monitors jobs; communicates with workers |
-| `ADMIN` | Manages users, roles, organization settings and audit history |
+| `WORKER` | Performs assigned operations (deliveries, collections, visits), captures evidence, works offline |
+| `MANAGER` | Creates, assigns, verifies and monitors operations for their team and shops |
+| `ORGANIZATION_ADMIN` | Runs one organization: members, teams, shops, products, settings, audit log |
+| `SUPER_ADMIN` | Runs the platform: creates and suspends organizations; sees no tenant data |
 
 See the capability matrix in [docs/architecture.md](docs/architecture.md#8-role-model).
 

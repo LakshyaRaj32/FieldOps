@@ -27,6 +27,15 @@ Decided in `apps/api/src/notifications/domain/notification-plan.ts` (pure, unit-
 Nobody is notified of their own action. Starting a job, notes, photos and edits notify no one:
 they reach open screens through realtime and everything through sync.
 
+### Added in the multi-tenant phase
+
+`JOB_RESCHEDULED` (worker), `JOB_DECLINED`, `JOB_SUBMITTED`, `JOB_FAILED` (responsible
+manager), `JOB_REJECTED` and `JOB_COMPLETED` on verification (worker), and `PAYMENT_OVERDUE`
+(the shop's managers and the organization's admins, once per order). A reason given with a
+decline, rejection, failure, reschedule or cancellation is included in the message. An overdue
+notice has no operation (`jobId` null) and a `shopId`; tapping it opens the shop. Push data
+carries `shopId` (empty string when there is none) alongside `jobId`.
+
 ## Flow
 
 ```text

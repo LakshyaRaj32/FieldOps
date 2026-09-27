@@ -4,7 +4,7 @@ The project is managed in six phases ([master-development-plan.md](master-develo
 This file records where the project stands. Update it at every phase checkpoint.
 
 ```text
-Current Phase:   Phase 4 — Field Operations, plus the UI/UX improvement phase
+Current Phase:   Multi-tenant business logic (after Phase 4 and the UI/UX phase)
 Phase Status:    AUTOMATED CHECKS PASS — device verification pending (the owner tests on the phone)
 Completed Phase: Phase 1 — Foundation
 Next Phase:      Phase 5 — Production Engineering (not started)
@@ -33,6 +33,10 @@ Next Phase:      Phase 4 — Field Operations
 ```
 
 and create the tags `phase-2-core-product` and `phase-3-offline-first`.
+
+**Multi-tenant business logic** (2026-09-27) is implemented and passes every automated check;
+see [its section](#multi-tenant-business-logic-phase). The development database must be
+migrated before running the API (`npm run db:deploy`).
 
 ## Phase overview
 
@@ -588,3 +592,78 @@ The APK was built but not installed or run: the owner does the device testing.
 - The product is named FieldOps in code and on the device. The UI/UX brief called it
   "ServiceHub"; renaming is a separate decision, and the icon has no lettering so it fits
   either name.
+
+## Multi-tenant business logic phase
+
+Commit `1200b16` on `phase-3/offline-first` (2026-09-27). The rules themselves are in
+[business-domain.md](business-domain.md).
+
+### What was implemented
+
+- **Organizations** as tenants, with `SUPER_ADMIN`, `ORGANIZATION_ADMIN` (was `ADMIN`),
+  `MANAGER` and `WORKER`; teams (worker → manager); scoped managers with optional
+  organization-wide access; suspension that blocks sign-in, requests and realtime.
+- **Shops** (many-to-many with managers and workers), **products**, **orders** with items and
+  **payments**: partial payments, server-derived balances, no overpayment (row lock and CHECK),
+  duplicate reference protection, verification and rejection, overdue notices.
+- **Operation types** on the existing job, with one shared state machine (field lifecycle for
+  every type except `GENERAL`) and shared submission requirements checked offline and on the
+  server. Verification applies the effect (delivery, payment, new order) in one transaction.
+- **Append-only audit log**, business-event notifications, realtime presence for the
+  dashboard's "online" figure, arrival radius flag, duplicate photo detection.
+- **Mobile:** shops, shop detail and account, orders, members, products, organization
+  settings, change password, platform (organizations) screens; role-based tabs; the field
+  lifecycle and submission form offline (local schema v3); dashboard money, team and shop
+  figures; "To verify" tile for workers; a "not part of an organization yet" dashboard.
+
+### Important decisions
+
+- The operation **is** the job: the offline outbox, evidence, messages and notifications are
+  reused, and `/jobs` stays the API. `GENERAL` jobs behave exactly as before.
+- Existing data moves into a "Default organization"; nothing is deleted. The role enum value is
+  renamed in place, so existing `ADMIN` users become `ORGANIZATION_ADMIN`.
+- Verification is the `SUBMITTED` status, rescheduling an action; see
+  [business-domain.md](business-domain.md#5-operation-types-and-the-state-machine).
+- No new infrastructure: the overdue scan is an in-process timer (`OVERDUE_SCAN_INTERVAL`).
+- No new dependencies.
+
+### Testing status
+
+| Suite | Result |
+| --- | --- |
+| Shared (`packages/shared`) | 88 passed |
+| API unit | 137 passed |
+| API E2E (real PostgreSQL, `fieldops_test`) | 200 passed, including new `tenancy`, `payments`, `operations`, `shops` suites |
+| Mobile (Jest) | 266 passed, 2 skipped (live API tests) |
+| Type check, lint, API build | clean |
+
+The E2E suites cover the testing checklist: cross-tenant reads and writes refused (404 or
+`INVALID_REFERENCE`), scoped managers, suspended organizations, partial and concurrent
+payments, overpayment and duplicate references refused, verification and rejection effects,
+every lifecycle transition and its idempotent retry, submission requirements, audit rows for
+tenancy and payment changes, and the notifications of payment and operation events.
+
+### Steps to run it
+
+1. `npm run db:deploy` against `fieldops_dev` (applies the two new migrations).
+2. Create the first platform admin:
+   `npm run user:set-role -w @fieldops/api -- you@example.com SUPER_ADMIN`.
+3. Sign in on the phone as that user, create an organization and its admin, then as the admin
+   add members, shops and products.
+
+### Device verification
+
+Not yet done on the phone, and the Android APK was not rebuilt in this phase. Check: each role's
+tabs; a worker's delivery, collection and visit offline then synced; the manager verifying and
+rejecting; a shop's account after a partial payment; a suspended organization's members being
+refused.
+
+### Known issues and limitations
+
+- When an organization is suspended, the app is refused (`ORGANIZATION_SUSPENDED`) and shows
+  the error, but does not yet sign the user out or explain the suspension on a screen of its
+  own; the phone keeps its copy of the worker's operations until they sign out.
+- The overdue scan runs inside the API process; with several API instances it would run in each
+  (safe, because orders are claimed atomically, but wasteful). Phase 5 moves it to a queue.
+- Reports and exports, invoices, stock levels and route planning are not part of this phase.
+

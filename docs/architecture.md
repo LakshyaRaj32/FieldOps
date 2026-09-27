@@ -202,19 +202,23 @@ a whole row. Most offline writes therefore do not conflict at all. See
 The shared role vocabulary is defined in `packages/types/src/role.ts`. Enforcement is
 implemented in V2 onward.
 
-| Capability | WORKER | MANAGER | ADMIN |
-| --- | :---: | :---: | :---: |
-| View jobs assigned to self | ✅ | ✅ | ✅ |
-| Update status / add evidence on own assigned jobs | ✅ | — | — |
-| View all jobs in the organization | — | ✅ | ✅ |
-| Create, edit, assign, reassign, cancel jobs | — | ✅ | ✅ |
-| Share own location while on duty | ✅ | — | — |
-| View worker locations (on-duty only) | — | ✅ | ✅ |
-| Message assigned workers / managers | ✅ | ✅ | ✅ |
-| Receive operational notifications | ✅ (own jobs) | ✅ | ✅ |
-| Manage users and roles | — | — | ✅ |
-| Organization configuration | — | — | ✅ |
-| Read audit log | — | limited (own team's jobs) | ✅ |
+| Capability | WORKER | MANAGER | ORGANIZATION_ADMIN | SUPER_ADMIN |
+| --- | :---: | :---: | :---: | :---: |
+| Work on operations assigned to self (accept, travel, submit, evidence) | ✅ | — | — | — |
+| View operations | own | team and own shops (org-wide with `organizationWideAccess`) | organization | — |
+| Create, assign, verify, reject, reschedule, cancel operations | — | ✅ (in scope) | ✅ | — |
+| Shops: view, assign people / create, edit | — | ✅ (own) / — | ✅ / ✅ | — |
+| Orders and shop accounts | — | ✅ (own shops) | ✅ | — |
+| Products | read | read | ✅ | — |
+| Members, roles, teams, organization settings | — | — | ✅ | — |
+| Read audit log | — | — | ✅ (organization) | ✅ (platform) |
+| Create, suspend organizations and their admins | — | — | — | ✅ |
+| Message assigned workers / managers | ✅ | ✅ | ✅ | — |
+| Receive operational notifications | ✅ (own) | ✅ | ✅ | — |
+
+The multi-tenant phase replaced `ADMIN` with `ORGANIZATION_ADMIN` and added `SUPER_ADMIN`
+and organizations. Scopes, tenant isolation and the business rules are described in
+[business-domain.md](business-domain.md).
 
 **How authorization works:**
 

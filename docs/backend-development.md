@@ -100,11 +100,22 @@ Changing the schema: edit `prisma/schema.prisma`, then `npm run db:migrate -- --
 creates and applies a migration. Commit the generated SQL. `npm run db:studio -w @fieldops/api`
 opens Prisma Studio for browsing data.
 
-Granting a role (there is no role API yet):
+After pulling the multi-tenant phase, run `npm run db:deploy` once: it renames `ADMIN` to
+`ORGANIZATION_ADMIN` and moves existing users and jobs into a "Default organization".
+
+Roles are managed through the API (super admins create organizations and their admins,
+organization admins create members). The one exception is the first platform admin, which no
+API can create by design:
 
 ```bash
-npm run user:set-role -w @fieldops/api -- manager@example.com MANAGER
+npm run user:set-role -w @fieldops/api -- root@example.com SUPER_ADMIN
+# development shortcuts: a role in an organization (created if missing), optionally org-wide
+npm run user:set-role -w @fieldops/api -- raj@example.com MANAGER "Nike Operations"
+npm run user:set-role -w @fieldops/api -- raj@example.com MANAGER "Nike Operations" --org-wide
 ```
+
+`OVERDUE_SCAN_INTERVAL` (default `1h`, `off` to disable) sets how often overdue payments are
+checked; the E2E setup turns it off.
 
 ## 4. Test
 

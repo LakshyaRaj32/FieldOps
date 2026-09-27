@@ -98,6 +98,9 @@ its metadata: JPEG APP1–APP15 segments (EXIF with GPS, XMP, IPTC) and comments
 text and time chunks, and anything after `IEND`. Pixel data is copied untouched (no decode or
 re-encode). The one value kept is the EXIF **orientation**, rewritten as a minimal EXIF block,
 because camera photos are often stored sideways. The SHA-256 of the stored bytes is recorded.
+The same photo attached twice to one operation (the same bytes after processing) is stored
+once: the second upload succeeds and returns the operation unchanged, so an offline retry
+never fails.
 
 ## On the device
 

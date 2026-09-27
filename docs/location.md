@@ -110,6 +110,11 @@ The permission is never requested at app start.
   reported accuracy, and with mock-location detection reported as a signal.
 - The phone shows its own estimate for a pending command; the server's value replaces it
   after sync.
+- **Arrival at a shop** (field operations, multi-tenant phase): `arrive` records the position,
+  and the operation is flagged "outside the site" to managers when it is farther from the
+  shop than the organization's `arrivalRadiusMeters` (default 300 m, set in the organization
+  settings). The same rule applies: flagged for review, never refused. A shop without
+  coordinates cannot be checked, and nothing is flagged.
 
 ## Offline behavior
 

@@ -165,7 +165,32 @@ A failed or conflicting entry never blocks other jobs.
 
 ---
 
-## Original design (V0)
+## Field operations (multi-tenant phase)
+
+Local schema **v3** rebuilds the outbox table to accept the field lifecycle's commands, keeping
+every pending entry exactly; jobs stored by older versions read as `GENERAL` jobs whose
+manager is their creator. The new outbox commands, each sent to its own endpoint with the
+entry's mutation ID as `Idempotency-Key`:
+
+| Command | Endpoint | Payload |
+| --- | --- | --- |
+| `job.accept` | `POST /jobs/:id/accept` | – |
+| `job.decline` | `POST /jobs/:id/decline` | `{ reason }` |
+| `job.depart` | `POST /jobs/:id/depart` | `{ location? }` |
+| `job.arrive` | `POST /jobs/:id/arrive` | `{ location? }` |
+| `job.submit` | `POST /jobs/:id/submit` | answers, counts, order lines, payment (with its device-generated ID) |
+| `job.fail` | `POST /jobs/:id/fail` | `{ reason }` |
+
+- The phone decides each step with the shared state machine and refuses an incomplete
+  submission with the shared requirements (`REQUIREMENTS_NOT_MET`) **before** queuing it, so a
+  submission queued offline is one the server accepts, unless the operation changed meanwhile.
+- The projection shows a submitted operation immediately: status `SUBMITTED`, the answers,
+  counts, new order lines (with product names from the cached catalog) and the payment as
+  pending verification.
+- The working set carries the active product catalog, stored in `sync_state`, so an order can
+  be collected offline.
+- Verification, rejection and rescheduling are manager actions and online only.
+
 
 FieldOps implements its **own** synchronization engine. It sits on established infrastructure
 (SQLite, PostgreSQL, HTTPS) but the protocol, outbox, conflict policies and retry strategy are

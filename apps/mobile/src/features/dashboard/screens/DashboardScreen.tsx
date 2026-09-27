@@ -1,6 +1,5 @@
 import React from 'react';
 import { RefreshControl, StyleSheet, View } from 'react-native';
-import { Role } from '@fieldops/types';
 
 import type { AppTabScreenProps } from '../../../app/navigation/types';
 import { EmptyState } from '../../../components/common/EmptyState';
@@ -24,6 +23,7 @@ import {
 import { useAppDispatch, useAppSelector } from '../../../store/hooks';
 import { selectSessionUser } from '../../../store/slices/sessionSlice';
 import { useTheme } from '../../../theme';
+import { isFieldWorker, isUnaffiliated, ROLE_LABELS } from '../../auth/roles';
 import { jobsApi, useGetJobOverviewQuery } from '../../jobs/api/jobsApi';
 import { JobCard } from '../../jobs/components/JobCard';
 import {
@@ -60,7 +60,6 @@ export function DashboardScreen({
   navigation,
 }: AppTabScreenProps<'Dashboard'>): React.JSX.Element {
   const user = useAppSelector(selectSessionUser);
-  const isWorker = user?.role === Role.WORKER;
   const openJob = (jobId: string) =>
     navigation.navigate('Jobs', {
       screen: 'JobDetail',
@@ -70,10 +69,43 @@ export function DashboardScreen({
     });
   const openJobs = () => navigation.navigate('Jobs', { screen: 'JobList' });
 
-  return isWorker ? (
+  if (isUnaffiliated(user)) {
+    // No Operations tab: there is nothing to open until an organization adds the account.
+    return <UnaffiliatedHome />;
+  }
+  return isFieldWorker(user) ? (
     <WorkerHome onOpenJob={openJob} onOpenJobs={openJobs} />
   ) : (
     <ManagerHome onOpenJob={openJob} onOpenJobs={openJobs} />
+  );
+}
+
+/** A self-registered account no organization has added yet: say what happens next. */
+function UnaffiliatedHome(): React.JSX.Element {
+  const theme = useTheme();
+  const user = useAppSelector(selectSessionUser);
+  return (
+    <Screen>
+      <DashboardHeader />
+      <Card>
+        <EmptyState
+          icon="business-outline"
+          title="You're not part of an organization yet"
+          description={
+            'Ask your organization admin to add you as a member, using the email ' +
+            `${
+              user?.email ?? 'you signed up with'
+            }. Once they have, sign out and back in ` +
+            'to see your operations.'
+          }
+        />
+        <View style={{ gap: theme.spacing.xs }}>
+          <AppText variant="caption" tone="muted">
+            Nothing is shared with any organization until you are added.
+          </AppText>
+        </View>
+      </Card>
+    </Screen>
   );
 }
 
@@ -96,7 +128,11 @@ function DashboardHeader(): React.JSX.Element {
       </View>
       <View style={[styles.row, { gap: theme.spacing.sm }]}>
         {user !== null ? (
-          <Badge label={user.role} tone="primary" icon="shield-outline" />
+          <Badge
+            label={ROLE_LABELS[user.role]}
+            tone="primary"
+            icon="shield-outline"
+          />
         ) : null}
         <Badge
           label={describeConnectivityStatus(connectivity.status)}
@@ -216,7 +252,7 @@ function WorkerHome({ onOpenJob, onOpenJobs }: HomeProps): React.JSX.Element {
         {error !== undefined ? (
           <ErrorState title="Couldn't read your jobs" error={error} />
         ) : figures === undefined ? (
-          <MetricGridSkeleton count={3} />
+          <MetricGridSkeleton count={4} />
         ) : (
           <MetricGrid
             metrics={[
@@ -231,6 +267,13 @@ function WorkerHome({ onOpenJob, onOpenJobs }: HomeProps): React.JSX.Element {
                 value: String(figures.inProgress),
                 icon: 'play-circle-outline',
                 tone: 'info',
+              },
+              {
+                label: 'To verify',
+                value: String(figures.awaitingVerification),
+                icon: 'hourglass-outline',
+                tone: 'warning',
+                caption: 'Submitted, with your manager',
               },
               {
                 label: 'Completed',

@@ -31,7 +31,9 @@ committed migrations in `apps/api/prisma/migrations/`.
 | `email` | `varchar(254)` NOT NULL, **unique** | Stored trimmed and lower-cased |
 | `password_hash` | `text` NOT NULL | Argon2id PHC string, never the password |
 | `first_name`, `last_name` | `varchar(100)` NOT NULL | |
-| `role` | `"Role"` NOT NULL, default `WORKER` | `WORKER`, `MANAGER`, `ADMIN` |
+| `role` | `"Role"` NOT NULL, default `WORKER` | `WORKER`, `MANAGER`, `ORGANIZATION_ADMIN` (was `ADMIN`, renamed in place), `SUPER_ADMIN` |
+| `organization_id` | `uuid` NULL → `organizations` | NULL for super admins and self-registered accounts not yet added |
+| `organization_wide_access` | `boolean` NOT NULL, default `false` | A manager who sees the whole organization, not only their team and shops |
 | `is_active` | `boolean` NOT NULL, default `true` | Deactivated users cannot sign in or use existing sessions |
 | `created_at` | `timestamptz(3)` NOT NULL, default `now()` | |
 | `updated_at` | `timestamptz(3)` NOT NULL | Maintained by Prisma (`@updatedAt`) |
@@ -194,6 +196,52 @@ Same shape and rules as `job_notes` (device ID, non-blank body up to 2000 charac
 
 Index `(user_id, created_at, id)` serves the inbox (newest first, keyset pagination) and the
 unread count.
+
+## Multi-tenant tables (organizations and commerce)
+
+Migrations `20260927140000_roles_and_lifecycle` and `20260927140100_organizations_and_commerce`.
+The rules these tables enforce are explained in [business-domain.md](business-domain.md).
+
+| Table | Purpose | Notable constraints |
+| --- | --- | --- |
+| `organizations` | Tenants: status, currency, time zone, arrival radius, order counter | `name` unique |
+| `team_memberships` | Worker → manager, with `ended_at` history | Partial unique `team_memberships_current_worker_key`: one current manager per worker |
+| `shops` | Customers visited in the field | `(organization_id, name)` unique; name and address not blank, coordinates both or neither and in range (CHECK) |
+| `shop_assignments` | Managers and workers per shop, with `ended_at` history | Partial unique `shop_assignments_current_key` |
+| `products` | Catalog | `(organization_id, sku)` unique; `unit_price >= 0` |
+| `orders` | `ORD-<n>`, total, `paid_amount`, order and due dates | `(organization_id, order_number)` unique; `0 <= paid_amount <= total_amount`, due date not before order date, nothing paid on a cancelled order (CHECK) |
+| `order_items` | Product, quantity, unit price copied at order time, delivered quantity | `quantity > 0`, `line_total = quantity * unit_price`, `0 <= delivered_quantity <= quantity` (CHECK) |
+| `payments` | Collections, ID from the phone | Partial unique `payments_reference_key` on `(organization_id, method, reference)` where not `REJECTED`; `amount > 0`, a reference unless cash, verification fields match the status (CHECK) |
+| `job_lines` | Products to deliver, count or order on an operation | One per position; quantities not negative (CHECK) |
+| `audit_logs` | Append-only history | Trigger refuses `UPDATE` and `DELETE` |
+
+`jobs` gained `organization_id`, `type`, `manager_id`, `shop_id`, `order_id`,
+`expected_amount`, `requires_photo`, `submission_note`, `failure_reason`, `accepted_at`,
+`arrived_at`, `submitted_at`, `failed_at` and the arrival position. `job_checklist_items` gained
+`checked` and `response_note`; `job_events` gained `reason`; `notifications.job_id` is nullable
+and `shop_id` was added (overdue notices).
+
+**Money** columns are `BIGINT` minor units. **Tenant references** are composite foreign keys
+`(x_id, organization_id) → (id, organization_id)` with `ON UPDATE RESTRICT`, which is why each
+parent table has a unique `(id, organization_id)`: the database cannot link rows of two
+organizations.
+
+**Backfill.** Existing users and jobs were moved into an organization named
+"Default organization"; `manager_id` of existing jobs is their creator; existing jobs are
+`GENERAL`. Nothing was deleted.
+
+**Hand-written SQL** (at the end of the second migration, commented): the partial unique
+indexes, the CHECK constraints, the audit trigger and the backfill. The role rename is its own
+migration because PostgreSQL cannot use a new enum value in the transaction that adds it.
+
+**Indexes added** for the new queries: jobs by `(organization_id, scheduled_at, id)` and
+`(organization_id, status, scheduled_at)` (organization lists and the overview),
+`(manager_id, scheduled_at, id)` (a scoped manager's list), `(shop_id, scheduled_at)` (a
+shop's operations) and `order_id`; orders by `(shop_id, created_at)` and
+`(organization_id, due_date)` (the overdue scan); payments by `(order_id, status)`,
+`(organization_id, status, verified_at)` and `job_id`; team memberships and shop assignments
+by `(…, ended_at)` for the current rows; audit logs by `(organization_id, created_at)` and
+`(entity_type, entity_id, created_at)`.
 
 ## Indexing decisions
 

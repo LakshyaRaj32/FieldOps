@@ -105,6 +105,14 @@ readable message, the request ID) is all present.
 | `EVIDENCE_LIMIT_REACHED` | 422 | The job already has 50 photos |
 | `INTERNAL_ERROR` | 500 | Unexpected failure; see server logs with the request ID |
 | `SERVICE_UNAVAILABLE` | 503 | A dependency (the database) is down; readiness probe |
+| `NOT_IN_ORGANIZATION` | 403 | The account belongs to no organization, so it has no operations, shops or members |
+| `ORGANIZATION_SUSPENDED` | 403 | The organization is suspended: sign-in, refresh and every request are refused |
+| `INVALID_REFERENCE` | 422 | A shop, order, product, worker or manager ID is unknown, inactive or outside the caller's scope |
+| `REQUIREMENTS_NOT_MET` | 422 | The submission lacks what the operation type needs (photo, answers, counts, reference); `details` lists each problem |
+| `AMOUNT_EXCEEDS_BALANCE` | 422 | A payment or expected amount above the order's collectable balance |
+| `DUPLICATE_PAYMENT_REFERENCE` | 409 | The reference was already used for this payment method in the organization |
+| `ORDER_NOT_CANCELLABLE` | 409 | The order has deliveries or payments, or is closed |
+| `ALREADY_EXISTS` | 409 | A unique name, SKU or email is taken |
 
 The runtime list (`apps/api/src/common/errors/error-codes.ts`) is checked at compile time
 against the shared union type, so the two cannot drift.
@@ -135,6 +143,63 @@ request by the job policy (`apps/api/src/jobs/domain/job.policy.ts`).
 | `GET` | `/api/v1/notifications` | everyone | `200` the caller's inbox `{ items, nextCursor, unreadCount }` (Phase 4, [notifications.md](notifications.md)) |
 | `POST` | `/api/v1/notifications/:id/read`, `/read-all` | everyone | `204` |
 | `PUT` / `DELETE` | `/api/v1/notifications/devices/current` | everyone | `204` register / remove this session's FCM token |
+
+"MANAGER, ADMIN" above means managers and organization admins **within their scope**
+([business-domain.md](business-domain.md#2-roles-and-scopes)); an operation outside it is
+`404`. `ADMIN` is now called `ORGANIZATION_ADMIN`.
+
+### Operations (multi-tenant phase)
+
+A job has a `type` (`GENERAL`, `DELIVERY`, `PAYMENT_COLLECTION`, `SHOP_VISIT`,
+`ORDER_COLLECTION`, `INVENTORY_CHECK`). Create takes `type`, `shopId`, `orderId`,
+`expectedAmount` (minor units), `productIds`, `requiresPhoto` and, for admins, `managerId`.
+Non-`GENERAL` types use the field lifecycle; the rules are in
+[business-domain.md](business-domain.md#5-operation-types-and-the-state-machine). Every command
+below accepts an `Idempotency-Key`, like `start`.
+
+| Method | Path | Who | Body | Result |
+| --- | --- | --- | --- | --- |
+| `POST` | `/jobs/:id/accept` | assigned WORKER | – | `ACCEPTED` |
+| `POST` | `/jobs/:id/decline` | assigned WORKER | `{ reason }` | `PENDING`, unassigned |
+| `POST` | `/jobs/:id/depart` | assigned WORKER | `{ location? }` | `EN_ROUTE` |
+| `POST` | `/jobs/:id/arrive` | assigned WORKER | `{ location? }` | `ARRIVED` (flagged if outside the radius) |
+| `POST` | `/jobs/:id/submit` | assigned WORKER | `{ note?, checklist?, lineCounts?, orderLines?, payment? }` | `SUBMITTED` |
+| `POST` | `/jobs/:id/fail` | assigned WORKER | `{ reason }` | `FAILED` |
+| `POST` | `/jobs/:id/verify` | MANAGER, ORG ADMIN | `{ note?, orderDueDate? }` | `COMPLETED`, effect applied |
+| `POST` | `/jobs/:id/reject` | MANAGER, ORG ADMIN | `{ reason }` | `IN_PROGRESS`, payment rejected |
+| `POST` | `/jobs/:id/reschedule` | MANAGER, ORG ADMIN | `{ scheduledAt, reason }` | same or `ASSIGNED` |
+
+`GET /jobs` also filters by `type` and `shopId`. `GET /jobs/working-set` now also returns
+`products` (the active catalog, for offline order collection).
+
+## Organizations, members, shops, products and orders
+
+| Method | Path | Who | Result |
+| --- | --- | --- | --- |
+| `GET` / `POST` | `/organizations` | SUPER_ADMIN | list / create (with its first admin) |
+| `GET` / `PATCH` | `/organizations/:id` | SUPER_ADMIN | details / edit |
+| `POST` | `/organizations/:id/suspend`, `/activate` | SUPER_ADMIN | status change, sessions refused while suspended |
+| `POST` | `/organizations/:id/admins` | SUPER_ADMIN | add an organization admin |
+| `GET` / `PATCH` | `/organization` | members / ORG ADMIN | own organization and settings (currency, time zone, arrival radius) |
+| `GET` / `POST` | `/organization/members` | ORG ADMIN | list / create a member |
+| `GET` / `PATCH` | `/organization/members/:id` | ORG ADMIN | details / role, status, org-wide access |
+| `PUT` | `/organization/members/:id/manager` | ORG ADMIN | set or clear a worker's manager |
+| `GET` | `/users/workers` | MANAGER, ORG ADMIN | workers the caller can assign (their team) |
+| `GET` / `POST` | `/products` | members / ORG ADMIN | catalog / add a product |
+| `GET` / `PATCH` | `/products/:id` | members / ORG ADMIN | details / edit, deactivate |
+| `GET` / `POST` | `/shops` | MANAGER, ORG ADMIN / ORG ADMIN | shops in scope / create |
+| `GET` / `PATCH` | `/shops/:id` | MANAGER, ORG ADMIN / ORG ADMIN | details with assignees / edit |
+| `GET` | `/shops/:id/account` | MANAGER, ORG ADMIN | outstanding, overdue, orders, payments, recent operations |
+| `POST` | `/shops/:id/assignments` | MANAGER, ORG ADMIN | assign a manager or worker (`{ userId }`) |
+| `DELETE` | `/shops/:id/assignments/:userId` | MANAGER, ORG ADMIN | end an assignment |
+| `GET` / `POST` | `/orders` | MANAGER, ORG ADMIN | orders in scope (filters `shopId`, `status` = `OPEN`, `UNPAID` or `ALL`) / create with items |
+| `GET` | `/orders/:id` | MANAGER, ORG ADMIN | items, payments, balances |
+| `POST` | `/orders/:id/cancel` | MANAGER, ORG ADMIN | `{ reason }`, only before any delivery or payment |
+| `GET` | `/audit-logs` | ORG ADMIN, SUPER_ADMIN | the audit log, newest first, cursor pages |
+| `POST` | `/auth/change-password` | everyone | `204`, other sessions revoked |
+
+Every amount is an integer in the organization currency's minor unit (paise for INR). Paths
+are under `/api/v1`. Swagger lists every body and response.
 
 ### Job overview
 
