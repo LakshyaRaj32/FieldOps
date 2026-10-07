@@ -22,4 +22,11 @@ export const TEST_ENV = {
   FCM_SERVICE_ACCOUNT_FILE: '',
   // The overdue scan is run explicitly by the tests that need it.
   OVERDUE_SCAN_INTERVAL: 'off',
+  // Redis is optional: set TEST_REDIS_URL to run the suite (and test/redis.e2e-spec.ts)
+  // against one. Test keys get their own prefix and are flushed by the tests that use them.
+  REDIS_URL: process.env['TEST_REDIS_URL'] ?? '',
+  REDIS_KEY_PREFIX: 'fieldops-test:',
+  // The suite signs in far more often than the policies allow; the rate-limit tests turn
+  // limiting on with their own small policies.
+  RATE_LIMIT_ENABLED: 'false',
 } as const;

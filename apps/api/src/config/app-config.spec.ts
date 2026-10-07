@@ -130,4 +130,63 @@ describe('parseAppConfig', () => {
     expect(message).toContain('REFRESH_TOKEN_EXPIRATION must be a duration');
     expect(message).toContain('not "*"');
   });
+
+  it('runs without Redis, with rate limiting on and no trusted proxy by default', () => {
+    const config = parseAppConfig(VALID);
+
+    expect(config.redis).toEqual({ url: undefined, keyPrefix: 'fieldops:' });
+    expect(config.rateLimit.enabled).toBe(true);
+    expect(config.rateLimit.policies.auth).toMatchObject({
+      algorithm: 'sliding-window',
+      limit: 20,
+      windowMs: 300_000,
+    });
+    expect(config.trustProxyHops).toBe(0);
+  });
+
+  it('reads Redis, rate-limit overrides and the proxy count', () => {
+    const config = parseAppConfig({
+      ...VALID,
+      REDIS_URL: 'rediss://default:secret@cache.example.com:6380',
+      REDIS_KEY_PREFIX: 'staging:',
+      RATE_LIMIT_ENABLED: 'false',
+      RATE_LIMIT_AUTH: '5/1m',
+      TRUST_PROXY: '1',
+    });
+
+    expect(config.redis).toEqual({
+      url: 'rediss://default:secret@cache.example.com:6380',
+      keyPrefix: 'staging:',
+    });
+    expect(config.rateLimit.enabled).toBe(false);
+    expect(config.rateLimit.policies.auth).toMatchObject({
+      algorithm: 'sliding-window',
+      limit: 5,
+      windowMs: 60_000,
+    });
+    expect(config.rateLimit.policies.default.limit).toBe(120);
+    expect(config.trustProxyHops).toBe(1);
+  });
+
+  it('rejects invalid Redis, rate-limit and proxy settings without echoing secrets', () => {
+    const message = errorOf({
+      ...VALID,
+      REDIS_URL: 'http://user:hunter2@cache',
+      RATE_LIMIT_ENABLED: 'yes',
+      RATE_LIMIT_UPLOAD: '0/1m',
+      RATE_LIMIT_REFRESH: 'lots',
+      TRUST_PROXY: 'true',
+    });
+
+    expect(message).toContain('REDIS_URL must be a redis:// or rediss:// URL.');
+    expect(message).not.toContain('hunter2');
+    expect(message).toContain('RATE_LIMIT_ENABLED must be true or false');
+    expect(message).toContain(
+      'RATE_LIMIT_UPLOAD must be <requests>/<duration>',
+    );
+    expect(message).toContain(
+      'RATE_LIMIT_REFRESH must be <requests>/<duration>',
+    );
+    expect(message).toContain('TRUST_PROXY must be the number of proxies');
+  });
 });

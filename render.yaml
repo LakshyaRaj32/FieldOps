@@ -2,6 +2,15 @@
 # Deploys FieldOps API backend as a Docker container connecting to Supabase PostgreSQL.
 
 services:
+  # Render Key Value (Redis-compatible): cache and shared rate-limit counters only.
+  # The free plan has no persistence, which is fine: everything in it is rebuildable.
+  - type: keyvalue
+    name: fieldops-redis
+    plan: free
+    region: oregon # Must match the web service's region (private network).
+    maxmemoryPolicy: volatile-lru # Every key has a TTL; evict the least recently used.
+    ipAllowList: [] # Private network only: no access from the internet.
+
   - type: web
     name: fieldops-api
     runtime: docker
@@ -52,4 +61,16 @@ services:
       # CORS origins (comma-separated, leave empty or add frontend domain if web client is introduced)
       - key: CORS_ORIGINS
         value: ""
+
+      # Internal connection string of the Key Value instance above.
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: fieldops-redis
+          property: connectionString
+
+      # Render's load balancer sits in front of the service: read the client IP from
+      # X-Forwarded-For through one hop (rate limits are per client IP for sign-in).
+      - key: TRUST_PROXY
+        value: 1
 

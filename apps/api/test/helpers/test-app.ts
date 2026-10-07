@@ -4,7 +4,11 @@ import request from 'supertest';
 
 import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/app.setup.js';
-import { APP_CONFIG, type AppConfig } from '../../src/config/app-config.js';
+import {
+  APP_CONFIG,
+  parseAppConfig,
+  type AppConfig,
+} from '../../src/config/app-config.js';
 import { PrismaService } from '../../src/database/prisma.service.js';
 import {
   PUSH_SENDER,
@@ -47,14 +51,21 @@ export interface TestApp {
 
 /** Boots the real application (same HTTP pipeline as main.ts) against the test database. */
 export async function createTestApp(
-  options: { readonly listen?: boolean } = {},
+  options: {
+    readonly listen?: boolean;
+    /** Adjusts the configuration parsed from TEST_ENV (rate-limit tests). */
+    readonly configure?: (config: AppConfig) => AppConfig;
+  } = {},
 ): Promise<TestApp> {
   const push = new RecordingPushSender();
+  const configure = options.configure ?? ((config: AppConfig) => config);
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule],
   })
     .overrideProvider(PUSH_SENDER)
     .useValue(push)
+    .overrideProvider(APP_CONFIG)
+    .useFactory({ factory: () => configure(parseAppConfig(process.env)) })
     .compile();
 
   const app = moduleRef.createNestApplication({

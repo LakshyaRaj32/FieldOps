@@ -2,6 +2,8 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { formatMoney } from '@fieldops/shared/money';
 
 import { writeAudit } from '../audit/audit.js';
+import { CacheKeys, CacheTtl } from '../cache/cache-keys.js';
+import { CacheService } from '../cache/cache.service.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { AppException } from '../common/errors/app-exception.js';
 import { BusinessErrors } from '../common/errors/business-errors.js';
@@ -64,6 +66,7 @@ export class OrdersService {
     private readonly shops: ShopsService,
     private readonly catalog: CatalogService,
     private readonly access: AccessService,
+    private readonly cache: CacheService,
   ) {}
 
   async create(
@@ -409,12 +412,20 @@ export class OrdersService {
     };
   }
 
-  /** The organization's currency and time zone. */
+  /**
+   * The organization's currency and time zone. Read by most order and dashboard requests and
+   * changed almost never, so it is cached (invalidated by OrganizationsService.update).
+   */
   async money(organizationId: string): Promise<OrganizationMoney> {
-    return this.prisma.organization.findUniqueOrThrow({
-      where: { id: organizationId },
-      select: { currency: true, timeZone: true },
-    });
+    return this.cache.getOrLoad(
+      CacheKeys.organizationMoney(organizationId),
+      CacheTtl.organizationMoney,
+      () =>
+        this.prisma.organization.findUniqueOrThrow({
+          where: { id: organizationId },
+          select: { currency: true, timeZone: true },
+        }),
+    );
   }
 
   private async loadReachable(scope: OrgScope, id: string): Promise<Order> {

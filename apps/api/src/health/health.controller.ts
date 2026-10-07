@@ -11,9 +11,19 @@ import { Public } from '../common/decorators/public.decorator.js';
 import { AppException } from '../common/errors/app-exception.js';
 import { ErrorCode } from '../common/errors/error-codes.js';
 import { PrismaService } from '../database/prisma.service.js';
+import { SkipRateLimit } from '../rate-limit/rate-limit.decorator.js';
+import { RedisService, type RedisStatus } from '../redis/redis.service.js';
 
 interface HealthStatus {
   readonly status: 'ok';
+}
+
+interface ReadinessStatus extends HealthStatus {
+  /**
+   * Informational: Redis is optional (the API works without it), so readiness does not
+   * depend on it.
+   */
+  readonly redis: RedisStatus;
 }
 
 /**
@@ -22,11 +32,15 @@ interface HealthStatus {
  */
 @ApiTags('health')
 @Public()
+@SkipRateLimit()
 @Controller({ path: 'health', version: VERSION_NEUTRAL })
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+  ) {}
 
   /** The process is up and serving HTTP. Never touches dependencies. */
   @Get('live')
@@ -36,14 +50,14 @@ export class HealthController {
     return { status: 'ok' };
   }
 
-  /** The process can serve real traffic: the database answers. */
+  /** The process can serve real traffic: the database answers. Also reports Redis. */
   @Get('ready')
   @ApiOperation({ summary: 'Readiness (checks PostgreSQL)' })
   @ApiOkResponse({ description: 'The database is reachable.' })
-  async ready(): Promise<HealthStatus> {
+  async ready(): Promise<ReadinessStatus> {
     try {
       await this.prisma.$queryRaw`SELECT 1`;
-      return { status: 'ok' };
+      return { status: 'ok', redis: this.redis.status() };
     } catch (error) {
       this.logger.error(
         'Readiness check failed: database unreachable',

@@ -7,6 +7,12 @@
  * are never included in error messages.
  */
 
+import {
+  DEFAULT_RATE_LIMIT_POLICIES,
+  RATE_LIMIT_POLICY_NAMES,
+  type RateLimitPolicy,
+  type RateLimitPolicyName,
+} from '../rate-limit/rate-limit.policies.js';
 import { parseDurationSeconds } from './duration.js';
 
 export const APP_ENVIRONMENTS = [
@@ -22,6 +28,19 @@ export interface AuthConfig {
   readonly accessTokenTtlSeconds: number;
   /** Session lifetime; sliding, extended on every successful refresh. */
   readonly refreshTokenTtlSeconds: number;
+}
+
+export interface RedisConfig {
+  /** redis:// or rediss:// URL. Undefined: no Redis (no cache, per-instance rate limits). */
+  readonly url: string | undefined;
+  /** Prepended to every key, so several environments can share one Redis. */
+  readonly keyPrefix: string;
+}
+
+export interface RateLimitConfig {
+  readonly enabled: boolean;
+  /** Every policy, with the RATE_LIMIT_<NAME> overrides applied. */
+  readonly policies: Readonly<Record<RateLimitPolicyName, RateLimitPolicy>>;
 }
 
 export interface AppConfig {
@@ -45,6 +64,14 @@ export interface AppConfig {
    * instance that should not run it).
    */
   readonly overdueScanIntervalSeconds: number;
+  readonly redis: RedisConfig;
+  readonly rateLimit: RateLimitConfig;
+  /**
+   * How many reverse proxies sit in front of the API (Express "trust proxy" hops). The client
+   * IP used for rate limits is read from X-Forwarded-For only through this many hops; 0 means
+   * the socket address is the client (no proxy).
+   */
+  readonly trustProxyHops: number;
 }
 
 /** Injection token for AppConfig. */
@@ -55,6 +82,9 @@ export type RawEnvironment = Readonly<Record<string, string | undefined>>;
 const MIN_SECRET_LENGTH = 32;
 const PLACEHOLDER_MARKER = 'replace-me';
 const ORIGIN_PATTERN = /^https?:\/\/[^\s/?#]+$/i;
+const REDIS_URL_PATTERN = /^rediss?:\/\/\S+$/i;
+const RATE_LIMIT_PATTERN = /^(\d+)\/(\S+)$/;
+const MAX_TRUST_PROXY_HOPS = 10;
 
 function isAppEnvironment(value: string): value is AppEnvironment {
   return (APP_ENVIRONMENTS as readonly string[]).includes(value);
@@ -177,6 +207,63 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
     overdueScanIntervalSeconds = duration('OVERDUE_SCAN_INTERVAL', '1h');
   }
 
+  const redisUrl = read('REDIS_URL') || undefined;
+  if (redisUrl !== undefined && !REDIS_URL_PATTERN.test(redisUrl)) {
+    errors.push('REDIS_URL must be a redis:// or rediss:// URL.');
+  }
+  const keyPrefix = read('REDIS_KEY_PREFIX') || 'fieldops:';
+
+  const rateLimitValue = read('RATE_LIMIT_ENABLED').toLowerCase();
+  let rateLimitEnabled = true;
+  if (rateLimitValue === 'false') {
+    rateLimitEnabled = false;
+  } else if (rateLimitValue !== '' && rateLimitValue !== 'true') {
+    errors.push(
+      `RATE_LIMIT_ENABLED must be true or false (received "${rateLimitValue}").`,
+    );
+  }
+  const policies = { ...DEFAULT_RATE_LIMIT_POLICIES };
+  for (const name of RATE_LIMIT_POLICY_NAMES) {
+    const variable = `RATE_LIMIT_${name.toUpperCase()}`;
+    const value = read(variable);
+    if (value === '') {
+      continue;
+    }
+    const match = RATE_LIMIT_PATTERN.exec(value);
+    const limit = Number(match?.[1]);
+    const windowSeconds =
+      match?.[2] === undefined ? undefined : parseDurationSeconds(match[2]);
+    if (
+      match === null ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      windowSeconds === undefined ||
+      windowSeconds < 1
+    ) {
+      errors.push(
+        `${variable} must be <requests>/<duration> such as 20/5m (received "${value}").`,
+      );
+      continue;
+    }
+    policies[name] = {
+      ...policies[name],
+      limit,
+      windowMs: windowSeconds * 1000,
+    };
+  }
+
+  const trustProxyValue = read('TRUST_PROXY') || '0';
+  const trustProxyHops = Number(trustProxyValue);
+  if (
+    !Number.isInteger(trustProxyHops) ||
+    trustProxyHops < 0 ||
+    trustProxyHops > MAX_TRUST_PROXY_HOPS
+  ) {
+    errors.push(
+      `TRUST_PROXY must be the number of proxies in front of the API, 0 to ${MAX_TRUST_PROXY_HOPS} (received "${trustProxyValue}").`,
+    );
+  }
+
   if (errors.length > 0) {
     throw new Error(
       `Invalid configuration:\n${errors.map(error => `  - ${error}`).join('\n')}`,
@@ -199,5 +286,8 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
     storageDir,
     fcmServiceAccountFile,
     overdueScanIntervalSeconds,
+    redis: { url: redisUrl, keyPrefix },
+    rateLimit: { enabled: rateLimitEnabled, policies },
+    trustProxyHops,
   };
 }
