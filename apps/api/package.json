@@ -29,6 +29,7 @@
     "user:set-role": "node --env-file-if-exists=.env scripts/set-role.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1147.0",
     "@fieldops/shared": "*",
     "@nestjs/common": "^12.1.0",
     "@nestjs/core": "^12.1.0",

@@ -43,6 +43,19 @@ export interface RateLimitConfig {
   readonly policies: Readonly<Record<RateLimitPolicyName, RateLimitPolicy>>;
 }
 
+/** An S3-compatible bucket (Cloudflare R2 in deployments, MinIO for local tests). */
+export interface S3Config {
+  /** https://<account>.r2.cloudflarestorage.com for R2. */
+  readonly endpoint: string;
+  /** "auto" for R2. */
+  readonly region: string;
+  readonly bucket: string;
+  readonly accessKeyId: string;
+  readonly secretAccessKey: string;
+  /** Bucket in the path instead of the host name (MinIO needs it; R2 accepts both). */
+  readonly forcePathStyle: boolean;
+}
+
 export interface QueueConfig {
   /**
    * Whether this process runs the background workers. Every instance enqueues; turn this off
@@ -64,6 +77,11 @@ export interface AppConfig {
   readonly swaggerEnabled: boolean;
   /** Directory of the local-disk object storage (job evidence). Resolved from the cwd. */
   readonly storageDir: string;
+  /**
+   * Set when STORAGE_DRIVER=s3: evidence goes to this bucket instead of STORAGE_DIR. Needed
+   * wherever the disk is not persistent (Render's free plan wipes it on every restart).
+   */
+  readonly s3: S3Config | undefined;
   /**
    * Path of the Firebase service-account JSON used to send push notifications (FCM HTTP v1).
    * Undefined: push is disabled; in-app notifications and realtime still work.
@@ -204,6 +222,48 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
   }
 
   const storageDir = read('STORAGE_DIR') || './storage';
+  const storageDriver = read('STORAGE_DRIVER').toLowerCase() || 'local';
+  let s3: S3Config | undefined;
+  if (storageDriver === 's3') {
+    const required = (name: string): string => {
+      const value = read(name);
+      if (value === '') {
+        errors.push(`${name} is missing (required with STORAGE_DRIVER=s3).`);
+      }
+      return value;
+    };
+    const endpoint = required('S3_ENDPOINT');
+    if (endpoint !== '' && !/^https?:\/\/[^\s/?#]+\/?$/i.test(endpoint)) {
+      errors.push(
+        'S3_ENDPOINT must be an http(s) origin such as https://<account>.r2.cloudflarestorage.com.',
+      );
+    }
+    const bucket = required('S3_BUCKET');
+    if (bucket !== '' && !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) {
+      errors.push(
+        `S3_BUCKET must be a bucket name (lower-case letters, digits, "-" and ".") (received "${bucket}").`,
+      );
+    }
+    const pathStyle = read('S3_FORCE_PATH_STYLE').toLowerCase();
+    if (pathStyle !== '' && pathStyle !== 'true' && pathStyle !== 'false') {
+      errors.push(
+        `S3_FORCE_PATH_STYLE must be true or false (received "${pathStyle}").`,
+      );
+    }
+    s3 = {
+      endpoint: endpoint.replace(/\/+$/, ''),
+      region: read('S3_REGION') || 'auto',
+      bucket,
+      // Secrets: reported missing, never echoed.
+      accessKeyId: required('S3_ACCESS_KEY_ID'),
+      secretAccessKey: required('S3_SECRET_ACCESS_KEY'),
+      forcePathStyle: pathStyle === 'true',
+    };
+  } else if (storageDriver !== 'local') {
+    errors.push(
+      `STORAGE_DRIVER must be local or s3 (received "${storageDriver}").`,
+    );
+  }
   const fcmServiceAccountFile = read('FCM_SERVICE_ACCOUNT_FILE') || undefined;
   if (
     fcmServiceAccountFile !== undefined &&
@@ -306,6 +366,7 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
     corsOrigins,
     swaggerEnabled,
     storageDir,
+    s3,
     fcmServiceAccountFile,
     overdueScanIntervalSeconds,
     redis: { url: redisUrl, keyPrefix },

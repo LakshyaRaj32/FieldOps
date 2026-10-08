@@ -18,6 +18,17 @@ export const TEST_ENV = {
   SWAGGER_ENABLED: 'false',
   // Evidence written by the E2E tests; emptied by the tests that use it (gitignored).
   STORAGE_DIR: './test-storage',
+  // Evidence goes to an S3-compatible bucket instead when TEST_S3_ENDPOINT is set (the
+  // S3Mock compose service: http://localhost:9090), the path Cloudflare R2 takes in
+  // deployments. S3Mock accepts any credentials.
+  STORAGE_DRIVER:
+    process.env['TEST_S3_ENDPOINT'] === undefined ? 'local' : 's3',
+  S3_ENDPOINT: process.env['TEST_S3_ENDPOINT'] ?? '',
+  S3_REGION: 'auto',
+  S3_BUCKET: process.env['TEST_S3_BUCKET'] ?? 'fieldops-evidence',
+  S3_ACCESS_KEY_ID: 'test-access-key',
+  S3_SECRET_ACCESS_KEY: 'test-secret-key',
+  S3_FORCE_PATH_STYLE: 'true',
   // Push goes to a recording fake in tests (test/helpers/test-app.ts).
   FCM_SERVICE_ACCOUNT_FILE: '',
   // The overdue scan is run explicitly by the tests that need it.

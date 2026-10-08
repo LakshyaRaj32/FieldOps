@@ -729,6 +729,20 @@ refused.
 **Testing:** `queue.e2e-spec.ts` (needs `TEST_REDIS_URL`). See the session notes for the run
 results.
 
+### Evidence in Cloudflare R2 (2026-10-08)
+
+Render's free disk is wiped on every deploy and restart, so uploaded photos were lost while
+their database rows stayed. Evidence now goes to a private Cloudflare R2 bucket
+(`STORAGE_DRIVER=s3`; [evidence.md](evidence.md#storage)) through `S3ObjectStorage` behind the
+existing `ObjectStorage` interface. Local disk stays the default for development. Tested
+against S3Mock, an S3-compatible compose service: `s3-storage.e2e-spec.ts`, plus the evidence
+E2E tests storing photos in the bucket (31 tests pass).
+
+**Owner action needed:** create the R2 bucket and an API token in Cloudflare, then set
+`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` in Render. Then
+check the startup log says "Bucket reachable" and that a photo uploaded before a redeploy still
+opens after it.
+
 **Remaining in Phase 5:** 5.4 HTTP idempotency keys, distributed locks and a transactional
 outbox for domain events, the Socket.IO Redis adapter, 5.5 observability (including queue
 metrics), 5.6 security review.

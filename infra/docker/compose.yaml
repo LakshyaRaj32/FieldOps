@@ -44,6 +44,24 @@ services:
       - fieldops-network
 
   # ===========================================================================
+  # S3Mock: an S3-compatible server standing in for Cloudflare R2 locally, to test
+  # STORAGE_DRIVER=s3 without a Cloudflare account. Optional:
+  #   docker compose -f infra/docker/compose.yaml --profile s3 up -d s3mock
+  # Accepts any credentials; never use it for real data.
+  # ===========================================================================
+  s3mock:
+    image: adobe/s3mock:latest
+    container_name: fieldops-s3mock
+    profiles: ["s3"]
+    restart: unless-stopped
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: fieldops-evidence
+    ports:
+      - "${S3MOCK_PORT:-9090}:9090"
+    networks:
+      - fieldops-network
+
+  # ===========================================================================
   # FieldOps API Backend
   # ===========================================================================
   api:

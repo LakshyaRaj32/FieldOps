@@ -54,9 +54,23 @@ services:
       - key: OVERDUE_SCAN_INTERVAL
         value: 1h
 
-      # Local disk storage directory for uploaded evidence
-      - key: STORAGE_DIR
-        value: ./storage
+      # Evidence photos go to a private Cloudflare R2 bucket. The free plan's disk is wiped
+      # on every deploy and restart, so local disk would lose them (docs/evidence.md).
+      # Create the bucket and an R2 API token (Object Read & Write on that bucket) in the
+      # Cloudflare dashboard, then set the four values below in the Render dashboard.
+      - key: STORAGE_DRIVER
+        value: s3
+      - key: S3_REGION
+        value: auto
+      # https://<account-id>.r2.cloudflarestorage.com
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
 
       # CORS origins (comma-separated, leave empty or add frontend domain if web client is introduced)
       - key: CORS_ORIGINS
