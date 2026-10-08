@@ -25,6 +25,43 @@ services:
       - fieldops-network
 
   # ===========================================================================
+  # Redis 7: cache and shared rate-limit counters (never business data).
+  # No persistence: everything in it can be rebuilt from PostgreSQL.
+  # ===========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: fieldops-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "volatile-lru"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - fieldops-network
+
+  # ===========================================================================
+  # S3Mock: an S3-compatible server standing in for Cloudflare R2 locally, to test
+  # STORAGE_DRIVER=s3 without a Cloudflare account. Optional:
+  #   docker compose -f infra/docker/compose.yaml --profile s3 up -d s3mock
+  # Accepts any credentials; never use it for real data.
+  # ===========================================================================
+  s3mock:
+    image: adobe/s3mock:latest
+    container_name: fieldops-s3mock
+    profiles: ["s3"]
+    restart: unless-stopped
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: fieldops-evidence
+    ports:
+      - "${S3MOCK_PORT:-9090}:9090"
+    networks:
+      - fieldops-network
+
+  # ===========================================================================
   # FieldOps API Backend
   # ===========================================================================
   api:
@@ -35,6 +72,8 @@ services:
     restart: unless-stopped
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     environment:
       APP_ENV: development
@@ -48,6 +87,7 @@ services:
       SWAGGER_ENABLED: "true"
       STORAGE_DIR: /app/apps/api/storage
       RUN_MIGRATIONS: "true"
+      REDIS_URL: redis://redis:6379
     ports:
       - "3000:3000"
     volumes:

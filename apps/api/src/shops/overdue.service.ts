@@ -1,10 +1,4 @@
-import {
-  Inject,
-  Injectable,
-  Logger,
-  type OnModuleDestroy,
-  type OnModuleInit,
-} from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { formatMoney } from '@fieldops/shared/money';
 
 import { AccessService } from '../access/access.service.js';
@@ -13,6 +7,9 @@ import { calendarDate, dateOnly, toAmount } from '../common/money.js';
 import { APP_CONFIG, type AppConfig } from '../config/app-config.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { DomainEvents } from '../events/domain-events.js';
+import { BackgroundTasks } from '../queue/background-tasks.service.js';
+
+export const OVERDUE_SCAN_TASK = 'payments.overdue-scan';
 
 /** Orders handled per organization per run (the next run takes the rest). */
 const BATCH = 200;
@@ -25,13 +22,13 @@ const BATCH = 200;
  * "Past due" uses the organization's calendar: an order due on 30 September is overdue from
  * 1 October in the organization's time zone.
  *
- * In-process timer for now (Phase 5 moves scheduled work to BullMQ); OVERDUE_SCAN_INTERVAL
- * sets the period or turns it off.
+ * A scheduled background task (docs/background-tasks.md): with Redis, each tick runs on one
+ * instance only; OVERDUE_SCAN_INTERVAL sets the period or turns it off. It is not retried:
+ * the next tick picks up whatever this one missed.
  */
 @Injectable()
-export class OverdueService implements OnModuleInit, OnModuleDestroy {
+export class OverdueService implements OnModuleInit {
   private readonly logger = new Logger(OverdueService.name);
-  private timer: NodeJS.Timeout | undefined;
   private running = false;
 
   constructor(
@@ -39,27 +36,22 @@ export class OverdueService implements OnModuleInit, OnModuleDestroy {
     private readonly access: AccessService,
     private readonly events: DomainEvents,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    private readonly tasks: BackgroundTasks,
   ) {}
 
   onModuleInit(): void {
-    const seconds = this.config.overdueScanIntervalSeconds;
-    if (seconds > 0) {
-      this.timer = setInterval(() => {
-        this.scan().catch((error: unknown) =>
-          this.logger.error(
-            'Overdue scan failed',
-            error instanceof Error ? error.stack : String(error),
-          ),
-        );
-      }, seconds * 1000);
-      this.timer.unref();
-    }
-  }
-
-  onModuleDestroy(): void {
-    if (this.timer !== undefined) {
-      clearInterval(this.timer);
-    }
+    this.tasks.define({
+      name: OVERDUE_SCAN_TASK,
+      queue: 'maintenance',
+      attempts: 1,
+      everyMs: this.config.overdueScanIntervalSeconds * 1000,
+      run: async () => {
+        const notified = await this.scan();
+        if (notified > 0) {
+          this.logger.log(`Overdue scan: ${notified} order(s) notified`);
+        }
+      },
+    });
   }
 
   /** One pass over every active organization. Returns the number of orders notified. */

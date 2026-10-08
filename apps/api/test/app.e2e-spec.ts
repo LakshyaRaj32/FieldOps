@@ -18,7 +18,14 @@ describe('HTTP pipeline (e2e)', () => {
 
     const ready = await t.http().get('/health/ready');
     expect(ready.status).toBe(200);
-    expect(ready.body).toEqual({ success: true, data: { status: 'ok' } });
+    // Redis is optional: "up" when the suite runs with TEST_REDIS_URL, "disabled" otherwise.
+    expect(ready.body).toEqual({
+      success: true,
+      data: {
+        status: 'ok',
+        redis: process.env['REDIS_URL'] === '' ? 'disabled' : 'up',
+      },
+    });
   });
 
   it('answers unknown routes with the error envelope (404 NOT_FOUND)', async () => {

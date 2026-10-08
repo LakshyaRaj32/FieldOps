@@ -61,6 +61,8 @@ export type ApiErrorCode =
   | 'UNSUPPORTED_FILE_TYPE'
   /** The job already has the maximum number of evidence files. */
   | 'EVIDENCE_LIMIT_REACHED'
+  /** Too many requests for this policy: wait `Retry-After` seconds, then retry. */
+  | 'TOO_MANY_REQUESTS'
   | 'INTERNAL_ERROR'
   | 'SERVICE_UNAVAILABLE';
 

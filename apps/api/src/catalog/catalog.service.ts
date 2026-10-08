@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 
 import { changesOf, writeAudit } from '../audit/audit.js';
+import { CacheKeys, CacheTtl } from '../cache/cache-keys.js';
+import { CacheService } from '../cache/cache.service.js';
 import { BusinessErrors } from '../common/errors/business-errors.js';
 import { orgScope } from '../common/tenancy/scope.js';
 import type { AuthenticatedUser } from '../common/types/authenticated-user.js';
@@ -14,6 +16,8 @@ import {
 } from './dto/product.dto.js';
 
 const DEFAULT_LIMIT = 200;
+/** The most products listed at once (ListProductsQueryDto's maximum limit). */
+const ACTIVE_CATALOG_LIMIT = 500;
 
 const isUniqueViolation = (error: unknown): boolean =>
   error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -23,35 +27,51 @@ const isUniqueViolation = (error: unknown): boolean =>
  * Owns the `products` table: each organization's catalog. Every member can read it (workers
  * need it to take orders); ORGANIZATION_ADMINs manage it. A product of another organization
  * is never found, so it can never end up on an order or an operation.
+ *
+ * The ACTIVE catalog is cached (every worker downloads it with their working set, and it
+ * changes rarely); create and update invalidate it after they commit. Order lines and
+ * operations still validate products against PostgreSQL (activeProductsById), so a price is
+ * never taken from the cache.
  */
 @Injectable()
 export class CatalogService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
+  ) {}
 
   async list(
     user: AuthenticatedUser,
     query: ListProductsQueryDto,
   ): Promise<ProductDto[]> {
     const scope = orgScope(user);
+    const limit = query.limit ?? DEFAULT_LIMIT;
+    if (query.status !== 'ALL') {
+      // Same order and filter as the cached list, which holds up to the maximum limit.
+      return (await this.activeProducts(scope.organizationId)).slice(0, limit);
+    }
     const rows = await this.prisma.product.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        ...(query.status !== 'ALL' && { status: 'ACTIVE' }),
-      },
+      where: { organizationId: scope.organizationId },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      take: query.limit ?? DEFAULT_LIMIT,
+      take: limit,
     });
     return rows.map(row => ProductDto.from(row));
   }
 
   /** The organization's active products (the worker's offline catalog). */
   async activeProducts(organizationId: string): Promise<ProductDto[]> {
-    const rows = await this.prisma.product.findMany({
-      where: { organizationId, status: 'ACTIVE' },
-      orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      take: 500,
-    });
-    return rows.map(row => ProductDto.from(row));
+    return this.cache.getOrLoad(
+      CacheKeys.activeCatalog(organizationId),
+      CacheTtl.activeCatalog,
+      async () => {
+        const rows = await this.prisma.product.findMany({
+          where: { organizationId, status: 'ACTIVE' },
+          orderBy: [{ name: 'asc' }, { id: 'asc' }],
+          take: ACTIVE_CATALOG_LIMIT,
+        });
+        return rows.map(row => ProductDto.from(row));
+      },
+    );
   }
 
   async get(user: AuthenticatedUser, id: string): Promise<ProductDto> {
@@ -85,6 +105,9 @@ export class CatalogService {
         });
         return created;
       });
+      await this.cache.invalidate(
+        CacheKeys.activeCatalog(scope.organizationId),
+      );
       return ProductDto.from(row);
     } catch (error) {
       if (isUniqueViolation(error)) {
@@ -134,6 +157,7 @@ export class CatalogService {
       });
       return updated;
     });
+    await this.cache.invalidate(CacheKeys.activeCatalog(scope.organizationId));
     return ProductDto.from(row);
   }
 

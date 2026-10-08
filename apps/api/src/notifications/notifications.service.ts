@@ -11,6 +11,7 @@ import { AppException } from '../common/errors/app-exception.js';
 import { ErrorCode } from '../common/errors/error-codes.js';
 import type { AuthenticatedUser } from '../common/types/authenticated-user.js';
 import { DomainEvents } from '../events/domain-events.js';
+import { BackgroundTasks } from '../queue/background-tasks.service.js';
 import {
   NotificationsRepository,
   type NotificationCursor,
@@ -29,6 +30,25 @@ import {
 import { PUSH_SENDER, type PushSender } from './push/push-sender.js';
 
 const DEFAULT_PAGE_SIZE = 30;
+
+export const PUSH_TASK = 'push.send';
+
+/** One push to one device. IDs only: the token and text are read when it is sent. */
+export interface PushTask {
+  readonly notificationId: string;
+  readonly deviceId: string;
+}
+
+/**
+ * FCM failures are mostly brief (network, quota, 5xx). Five tries with the default 5 s base
+ * delay span about a minute and a quarter (5 + 10 + 20 + 40 s); after that the push is stale
+ * anyway and goes to the dead-letter queue. The inbox already has the notification.
+ */
+const PUSH_ATTEMPTS = 5;
+
+/** Overdue-payment reminders wait behind pushes about live operations. */
+const PRIORITY_LIVE = 1;
+const PRIORITY_REMINDER = 5;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -38,9 +58,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * 1. A job or message event arrives (after its transaction committed).
  * 2. The plan decides who is told what (domain/notification-plan.ts).
  * 3. The inbox rows are written: the durable record the app lists.
- * 4. A push goes to each recipient's active devices; FCM's "unregistered" answer removes
- *    the registration. Push failures are logged, never retried before Phase 5 (BullMQ):
- *    the inbox, realtime and sync already carry the information.
+ * 4. One `push.send` task per active device is queued (docs/background-tasks.md). The
+ *    worker sends it; a temporary FCM failure is retried with backoff, FCM's "unregistered"
+ *    answer removes the registration. The inbox, realtime and sync already carry the
+ *    information, so a lost push is an inconvenience, not lost data.
  */
 @Injectable()
 export class NotificationsService implements OnModuleInit, OnModuleDestroy {
@@ -51,9 +72,16 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
     private readonly notifications: NotificationsRepository,
     private readonly events: DomainEvents,
     @Inject(PUSH_SENDER) private readonly push: PushSender,
+    private readonly tasks: BackgroundTasks,
   ) {}
 
   onModuleInit(): void {
+    this.tasks.define<PushTask>({
+      name: PUSH_TASK,
+      queue: 'notifications',
+      attempts: PUSH_ATTEMPTS,
+      run: task => this.sendPush(task),
+    });
     this.subscriptions.push(
       this.events.subscribe('job.changed', event =>
         this.deliver(planForJobChange(event)),
@@ -76,38 +104,61 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Records the plans in the inboxes, then pushes each one. Resolves when all are tried. */
+  /** Records the plans in the inboxes, then queues a push to each recipient's devices. */
   async deliver(plans: readonly PlannedNotification[]): Promise<void> {
     if (plans.length === 0) {
       return;
     }
     const created = await this.notifications.createMany(plans);
+    const now = new Date();
     for (const notification of created) {
-      const tokens = await this.notifications.activeTokens(
+      const priority =
+        notification.type === 'PAYMENT_OVERDUE'
+          ? PRIORITY_REMINDER
+          : PRIORITY_LIVE;
+      for (const deviceId of await this.notifications.activeDeviceIds(
         notification.userId,
-        new Date(),
-      );
-      for (const token of tokens) {
-        const result = await this.push.send(token, {
-          ...pushText(notification.type),
-          data: {
-            type: notification.type,
-            jobId: notification.jobId ?? '',
-            shopId: notification.shopId ?? '',
-            notificationId: notification.id,
-          },
-        });
-        if (result === 'invalid_token') {
-          await this.notifications.removeDeviceByToken(token);
-          this.logger.log(
-            `Removed an expired push registration (userId=${notification.userId})`,
-          );
-        } else if (result === 'failed') {
-          this.logger.warn(
-            `Push delivery failed (notificationId=${notification.id})`,
-          );
-        }
+        now,
+      )) {
+        await this.tasks.enqueue<PushTask>(
+          PUSH_TASK,
+          { notificationId: notification.id, deviceId },
+          // A notification is pushed to a device once, however often this is retried.
+          { id: `push.${notification.id}.${deviceId}`, priority },
+        );
       }
+    }
+  }
+
+  /** The push.send task. Throws on a temporary failure, so the queue retries it. */
+  async sendPush(task: PushTask): Promise<void> {
+    const target = await this.notifications.pushTarget(
+      task.notificationId,
+      task.deviceId,
+      new Date(),
+    );
+    if (target === null) {
+      return;
+    }
+    const { token, notification } = target;
+    const result = await this.push.send(token, {
+      ...pushText(notification.type),
+      data: {
+        type: notification.type,
+        jobId: notification.jobId ?? '',
+        shopId: notification.shopId ?? '',
+        notificationId: notification.id,
+      },
+    });
+    if (result === 'invalid_token') {
+      await this.notifications.removeDeviceByToken(token);
+      this.logger.log(
+        `Removed an expired push registration (userId=${notification.userId})`,
+      );
+    } else if (result === 'failed') {
+      throw new Error(
+        `Push delivery failed (notificationId=${notification.id})`,
+      );
     }
   }
 

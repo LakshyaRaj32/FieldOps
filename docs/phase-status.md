@@ -4,10 +4,10 @@ The project is managed in six phases ([master-development-plan.md](master-develo
 This file records where the project stands. Update it at every phase checkpoint.
 
 ```text
-Current Phase:   Multi-tenant business logic (after Phase 4 and the UI/UX phase)
-Phase Status:    AUTOMATED CHECKS PASS — device verification pending (the owner tests on the phone)
+Current Phase:   Phase 5 — Production Engineering (5.1, 5.2 and 5.3 done)
+Phase Status:    IN PROGRESS — next: 5.4 idempotency keys and distributed locks
 Completed Phase: Phase 1 — Foundation
-Next Phase:      Phase 5 — Production Engineering (not started)
+Next Phase:      Phase 6 — Showcase Release
 ```
 
 Phases 2 and 3 are implemented and verified by automated tests, including an end-to-end run of
@@ -46,7 +46,7 @@ migrated before running the API (`npm run db:deploy`).
 | 2 — Core Product | Jobs (the former V4 job model and screens) | Implemented, device verification pending |
 | 3 — Offline-First | Local SQLite, sync engine, conflict resolution (see the note below) | Implemented, device verification pending |
 | 4 — Field Operations | V7, V8, V9 | Code written; not installed, tested, built or device-verified |
-| 5 — Production Engineering | V10, V11, V12, V13, V15, V18 | Not started |
+| 5 — Production Engineering | V10, V11, V12, V13, V15, V18 | In progress: 5.1, 5.2 and 5.3 done ([below](#phase-5--production-engineering)) |
 | 6 — Showcase Release | V14, V16, V17, V19 | Not started |
 
 **Legacy version numbers for Phase 3.** The master plan maps Phase 3 to "former V4 + V5 +
@@ -667,3 +667,82 @@ refused.
   (safe, because orders are claimed atomically, but wasteful). Phase 5 moves it to a queue.
 - Reports and exports, invoices, stock levels and route planning are not part of this phase.
 
+---
+
+## Phase 5 — Production Engineering
+
+### 5.1 Redis and caching, 5.2 rate limiting (2026-10-07)
+
+**Implemented**
+
+- Redis 7 in the compose stack (`redis` service) and a Render Key Value instance
+  (`fieldops-redis`, free plan, private network) wired to the API's `REDIS_URL`.
+- `RedisService`: one optional connection. It fails fast while disconnected and reconnects in
+  the background; the API starts and works without Redis. `/health/ready` reports
+  `redis: up | down | disabled`.
+- Cache-aside `CacheService` with versioned keys, jittered TTLs, invalidation after commit,
+  generation-checked fills (a read that overlaps a write never caches the old value) and
+  per-process single-flight. It caches the active catalog and the organization's
+  currency/time zone. See [redis.md](redis.md).
+- Custom rate limiter: fixed window, sliding window log and token bucket, as pure TypeScript
+  (memory fallback) and atomic Lua (Redis). Global guard, per-user or per-IP keys, per-route
+  policies (`default`, `auth`, `refresh`, `upload`), env overrides, RateLimit headers, and
+  `429 TOO_MANY_REQUESTS` with `Retry-After`. `TRUST_PROXY` sets the client IP behind
+  Render's proxy. See [rate-limiting.md](rate-limiting.md).
+- New error code `TOO_MANY_REQUESTS` in `@fieldops/types`. The mobile app already treats 429
+  as retryable.
+
+**Testing**
+
+- Unit: 151 pass, including the algorithms and the new config options.
+- E2E with `TEST_REDIS_URL=redis://localhost:6379`: 218 pass across 13 files. This includes
+  `redis.e2e-spec.ts` (Lua scripts against the algorithms, atomicity across two connections,
+  invalidation race, fallbacks) and `rate-limit.e2e-spec.ts`. Without Redis, the Redis-only
+  tests are skipped and the rest pass on the fallbacks.
+- Typecheck and lint clean.
+
+**Still to verify**
+
+- On Render: the Key Value instance is created by the blueprint, and `/health/ready` shows
+  `redis: "up"`.
+- On Render: `TRUST_PROXY=1` yields real client IPs (two networks get separate `auth`
+  counters).
+- The policy values against real traffic (Phase 6 load tests).
+
+### 5.3 Background tasks with BullMQ (2026-10-08)
+
+**Implemented** ([background-tasks.md](background-tasks.md))
+
+- A `BackgroundTasks` service over BullMQ, with `notifications`, `maintenance` and
+  `dead-letter` queues. Tasks have attempts, exponential backoff, priority, deduplication by
+  ID, permanent failures and dead-lettering. Workers run in the API process
+  (`WORKERS_ENABLED`).
+- `push.send`: pushes leave the event handler. One task per device; the token is read at
+  send time, temporary FCM failures are retried and invalid tokens removed.
+- The overdue scan is now a BullMQ scheduled task (it was a `setInterval` in every instance),
+  so each tick runs once across instances.
+- Two new daily tasks: purging expired sessions and processed device commands older than
+  90 days (both planned in earlier phases).
+- Without Redis, or with Redis down, tasks run inline as before. BullMQ waits are
+  time-bounded, so startup, requests and shutdown never hang on Redis.
+
+**Testing:** `queue.e2e-spec.ts` (needs `TEST_REDIS_URL`). See the session notes for the run
+results.
+
+### Evidence in Cloudflare R2 (2026-10-08)
+
+Render's free disk is wiped on every deploy and restart, so uploaded photos were lost while
+their database rows stayed. Evidence now goes to a private Cloudflare R2 bucket
+(`STORAGE_DRIVER=s3`; [evidence.md](evidence.md#storage)) through `S3ObjectStorage` behind the
+existing `ObjectStorage` interface. Local disk stays the default for development. Tested
+against S3Mock, an S3-compatible compose service: `s3-storage.e2e-spec.ts`, plus the evidence
+E2E tests storing photos in the bucket (31 tests pass).
+
+**Owner action needed:** create the R2 bucket and an API token in Cloudflare, then set
+`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` in Render. Then
+check the startup log says "Bucket reachable" and that a photo uploaded before a redeploy still
+opens after it.
+
+**Remaining in Phase 5:** 5.4 HTTP idempotency keys, distributed locks and a transactional
+outbox for domain events, the Socket.IO Redis adapter, 5.5 observability (including queue
+metrics), 5.6 security review.

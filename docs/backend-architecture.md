@@ -103,7 +103,7 @@ jobs/
 ```text
 request
   → request ID + structured logging (middleware)
-  → rate limiter (custom distributed, V11; not present before)
+  → rate limiter (custom distributed; implemented, see rate-limiting.md)
   → AuthGuard           verify access token → attach principal { userId, orgId, role, sessionId }
   → PermissionsGuard    route-level permission check (e.g. job:assign)
   → ValidationPipe      runtime validation of body/query/params; unknown fields rejected
@@ -234,6 +234,9 @@ work.
   never lost between the database commit and the enqueue.
 
 ## 12. Redis-backed concerns
+
+Implemented so far: cache and rate limiter ([redis.md](redis.md),
+[rate-limiting.md](rate-limiting.md)). The rest of this table is still the plan.
 
 | Concern | Version | Design notes |
 | --- | --- | --- |

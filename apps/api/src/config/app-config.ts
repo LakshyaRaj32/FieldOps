@@ -7,6 +7,12 @@
  * are never included in error messages.
  */
 
+import {
+  DEFAULT_RATE_LIMIT_POLICIES,
+  RATE_LIMIT_POLICY_NAMES,
+  type RateLimitPolicy,
+  type RateLimitPolicyName,
+} from '../rate-limit/rate-limit.policies.js';
 import { parseDurationSeconds } from './duration.js';
 
 export const APP_ENVIRONMENTS = [
@@ -24,6 +30,42 @@ export interface AuthConfig {
   readonly refreshTokenTtlSeconds: number;
 }
 
+export interface RedisConfig {
+  /** redis:// or rediss:// URL. Undefined: no Redis (no cache, per-instance rate limits). */
+  readonly url: string | undefined;
+  /** Prepended to every key, so several environments can share one Redis. */
+  readonly keyPrefix: string;
+}
+
+export interface RateLimitConfig {
+  readonly enabled: boolean;
+  /** Every policy, with the RATE_LIMIT_<NAME> overrides applied. */
+  readonly policies: Readonly<Record<RateLimitPolicyName, RateLimitPolicy>>;
+}
+
+/** An S3-compatible bucket (Cloudflare R2 in deployments, MinIO for local tests). */
+export interface S3Config {
+  /** https://<account>.r2.cloudflarestorage.com for R2. */
+  readonly endpoint: string;
+  /** "auto" for R2. */
+  readonly region: string;
+  readonly bucket: string;
+  readonly accessKeyId: string;
+  readonly secretAccessKey: string;
+  /** Bucket in the path instead of the host name (MinIO needs it; R2 accepts both). */
+  readonly forcePathStyle: boolean;
+}
+
+export interface QueueConfig {
+  /**
+   * Whether this process runs the background workers. Every instance enqueues; turn this off
+   * on instances that should only serve HTTP (when a separate worker process runs them).
+   */
+  readonly workersEnabled: boolean;
+  /** First retry delay of a failed task; each further retry doubles it. */
+  readonly retryDelayMs: number;
+}
+
 export interface AppConfig {
   readonly environment: AppEnvironment;
   readonly host: string;
@@ -36,6 +78,11 @@ export interface AppConfig {
   /** Directory of the local-disk object storage (job evidence). Resolved from the cwd. */
   readonly storageDir: string;
   /**
+   * Set when STORAGE_DRIVER=s3: evidence goes to this bucket instead of STORAGE_DIR. Needed
+   * wherever the disk is not persistent (Render's free plan wipes it on every restart).
+   */
+  readonly s3: S3Config | undefined;
+  /**
    * Path of the Firebase service-account JSON used to send push notifications (FCM HTTP v1).
    * Undefined: push is disabled; in-app notifications and realtime still work.
    */
@@ -45,6 +92,15 @@ export interface AppConfig {
    * instance that should not run it).
    */
   readonly overdueScanIntervalSeconds: number;
+  readonly redis: RedisConfig;
+  readonly rateLimit: RateLimitConfig;
+  /**
+   * How many reverse proxies sit in front of the API (Express "trust proxy" hops). The client
+   * IP used for rate limits is read from X-Forwarded-For only through this many hops; 0 means
+   * the socket address is the client (no proxy).
+   */
+  readonly trustProxyHops: number;
+  readonly queue: QueueConfig;
 }
 
 /** Injection token for AppConfig. */
@@ -55,6 +111,9 @@ export type RawEnvironment = Readonly<Record<string, string | undefined>>;
 const MIN_SECRET_LENGTH = 32;
 const PLACEHOLDER_MARKER = 'replace-me';
 const ORIGIN_PATTERN = /^https?:\/\/[^\s/?#]+$/i;
+const REDIS_URL_PATTERN = /^rediss?:\/\/\S+$/i;
+const RATE_LIMIT_PATTERN = /^(\d+)\/(\S+)$/;
+const MAX_TRUST_PROXY_HOPS = 10;
 
 function isAppEnvironment(value: string): value is AppEnvironment {
   return (APP_ENVIRONMENTS as readonly string[]).includes(value);
@@ -163,6 +222,48 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
   }
 
   const storageDir = read('STORAGE_DIR') || './storage';
+  const storageDriver = read('STORAGE_DRIVER').toLowerCase() || 'local';
+  let s3: S3Config | undefined;
+  if (storageDriver === 's3') {
+    const required = (name: string): string => {
+      const value = read(name);
+      if (value === '') {
+        errors.push(`${name} is missing (required with STORAGE_DRIVER=s3).`);
+      }
+      return value;
+    };
+    const endpoint = required('S3_ENDPOINT');
+    if (endpoint !== '' && !/^https?:\/\/[^\s/?#]+\/?$/i.test(endpoint)) {
+      errors.push(
+        'S3_ENDPOINT must be an http(s) origin such as https://<account>.r2.cloudflarestorage.com.',
+      );
+    }
+    const bucket = required('S3_BUCKET');
+    if (bucket !== '' && !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) {
+      errors.push(
+        `S3_BUCKET must be a bucket name (lower-case letters, digits, "-" and ".") (received "${bucket}").`,
+      );
+    }
+    const pathStyle = read('S3_FORCE_PATH_STYLE').toLowerCase();
+    if (pathStyle !== '' && pathStyle !== 'true' && pathStyle !== 'false') {
+      errors.push(
+        `S3_FORCE_PATH_STYLE must be true or false (received "${pathStyle}").`,
+      );
+    }
+    s3 = {
+      endpoint: endpoint.replace(/\/+$/, ''),
+      region: read('S3_REGION') || 'auto',
+      bucket,
+      // Secrets: reported missing, never echoed.
+      accessKeyId: required('S3_ACCESS_KEY_ID'),
+      secretAccessKey: required('S3_SECRET_ACCESS_KEY'),
+      forcePathStyle: pathStyle === 'true',
+    };
+  } else if (storageDriver !== 'local') {
+    errors.push(
+      `STORAGE_DRIVER must be local or s3 (received "${storageDriver}").`,
+    );
+  }
   const fcmServiceAccountFile = read('FCM_SERVICE_ACCOUNT_FILE') || undefined;
   if (
     fcmServiceAccountFile !== undefined &&
@@ -176,6 +277,74 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
   if (overdueValue !== 'off') {
     overdueScanIntervalSeconds = duration('OVERDUE_SCAN_INTERVAL', '1h');
   }
+
+  const redisUrl = read('REDIS_URL') || undefined;
+  if (redisUrl !== undefined && !REDIS_URL_PATTERN.test(redisUrl)) {
+    errors.push('REDIS_URL must be a redis:// or rediss:// URL.');
+  }
+  const keyPrefix = read('REDIS_KEY_PREFIX') || 'fieldops:';
+
+  const rateLimitValue = read('RATE_LIMIT_ENABLED').toLowerCase();
+  let rateLimitEnabled = true;
+  if (rateLimitValue === 'false') {
+    rateLimitEnabled = false;
+  } else if (rateLimitValue !== '' && rateLimitValue !== 'true') {
+    errors.push(
+      `RATE_LIMIT_ENABLED must be true or false (received "${rateLimitValue}").`,
+    );
+  }
+  const policies = { ...DEFAULT_RATE_LIMIT_POLICIES };
+  for (const name of RATE_LIMIT_POLICY_NAMES) {
+    const variable = `RATE_LIMIT_${name.toUpperCase()}`;
+    const value = read(variable);
+    if (value === '') {
+      continue;
+    }
+    const match = RATE_LIMIT_PATTERN.exec(value);
+    const limit = Number(match?.[1]);
+    const windowSeconds =
+      match?.[2] === undefined ? undefined : parseDurationSeconds(match[2]);
+    if (
+      match === null ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      windowSeconds === undefined ||
+      windowSeconds < 1
+    ) {
+      errors.push(
+        `${variable} must be <requests>/<duration> such as 20/5m (received "${value}").`,
+      );
+      continue;
+    }
+    policies[name] = {
+      ...policies[name],
+      limit,
+      windowMs: windowSeconds * 1000,
+    };
+  }
+
+  const trustProxyValue = read('TRUST_PROXY') || '0';
+  const trustProxyHops = Number(trustProxyValue);
+  if (
+    !Number.isInteger(trustProxyHops) ||
+    trustProxyHops < 0 ||
+    trustProxyHops > MAX_TRUST_PROXY_HOPS
+  ) {
+    errors.push(
+      `TRUST_PROXY must be the number of proxies in front of the API, 0 to ${MAX_TRUST_PROXY_HOPS} (received "${trustProxyValue}").`,
+    );
+  }
+
+  const workersValue = read('WORKERS_ENABLED').toLowerCase();
+  let workersEnabled = true;
+  if (workersValue === 'false') {
+    workersEnabled = false;
+  } else if (workersValue !== '' && workersValue !== 'true') {
+    errors.push(
+      `WORKERS_ENABLED must be true or false (received "${workersValue}").`,
+    );
+  }
+  const retryDelayMs = duration('QUEUE_RETRY_DELAY', '5s') * 1000;
 
   if (errors.length > 0) {
     throw new Error(
@@ -197,7 +366,12 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
     corsOrigins,
     swaggerEnabled,
     storageDir,
+    s3,
     fcmServiceAccountFile,
     overdueScanIntervalSeconds,
+    redis: { url: redisUrl, keyPrefix },
+    rateLimit: { enabled: rateLimitEnabled, policies },
+    trustProxyHops,
+    queue: { workersEnabled, retryDelayMs },
   };
 }

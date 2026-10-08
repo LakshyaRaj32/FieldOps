@@ -7,6 +7,7 @@ import { UsersModule } from '../users/users.module.js';
 import { JobsRepository } from './data/jobs.repository.js';
 import { JobsController } from './jobs.controller.js';
 import { JobsService } from './jobs.service.js';
+import { MutationsMaintenance } from './mutations-maintenance.js';
 
 /**
  * Operations ("jobs"): every operation type, assignment, the per-type state machine and
@@ -18,6 +19,6 @@ import { JobsService } from './jobs.service.js';
 @Module({
   imports: [UsersModule, ShopsModule, CatalogModule, RealtimeModule],
   controllers: [JobsController],
-  providers: [JobsService, JobsRepository],
+  providers: [JobsService, JobsRepository, MutationsMaintenance],
 })
 export class JobsModule {}

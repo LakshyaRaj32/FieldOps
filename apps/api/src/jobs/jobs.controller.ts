@@ -69,6 +69,7 @@ import {
   JobsService,
   type UploadedEvidenceFile,
 } from './jobs.service.js';
+import { RateLimit } from '../rate-limit/rate-limit.decorator.js';
 
 const INVALID = {
   status: HttpStatus.BAD_REQUEST,
@@ -616,6 +617,7 @@ export class JobsController {
   }
 
   @Post(':id/evidence')
+  @RateLimit('upload')
   @Roles(...rolesWith('job:evidence'))
   @HttpCode(HttpStatus.CREATED)
   @UseInterceptors(

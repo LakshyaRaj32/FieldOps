@@ -13,6 +13,9 @@ export type UserWithOrganization = User & {
 };
 export type SessionWithUser = Session & { user: UserWithOrganization };
 
+/** Rows deleted per statement by the purge. */
+const PURGE_BATCH = 1_000;
+
 /** Longest User-Agent kept; matches the column size. */
 const USER_AGENT_MAX_LENGTH = 255;
 
@@ -127,5 +130,24 @@ export class SessionsService {
       data: { revokedAt: now, revokedReason: reason },
     });
     return count;
+  }
+
+  /**
+   * Deletes sessions that expired before `expiredBefore` (revoked ones included: they keep
+   * their expiry), with their push registrations. Batched, so no single statement holds many
+   * row locks. Returns the number deleted.
+   */
+  async purgeExpired(expiredBefore: Date): Promise<number> {
+    let total = 0;
+    for (;;) {
+      const deleted = await this.prisma.$executeRaw`
+        DELETE FROM sessions WHERE id IN (
+          SELECT id FROM sessions WHERE expires_at < ${expiredBefore} LIMIT ${PURGE_BATCH}
+        )`;
+      total += deleted;
+      if (deleted < PURGE_BATCH) {
+        return total;
+      }
+    }
   }
 }

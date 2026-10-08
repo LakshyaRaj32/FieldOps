@@ -161,7 +161,7 @@ A failed or conflicting entry never blocks other jobs.
 | `BLOCKED_BY_PREVIOUS` rejections | Later commands are still sent and judged individually | The state machine already rejects what no longer makes sense, and notes must not be lost |
 | Redux mirror of sync status | React context from the engine | Only the UI reads it; SQLite remains the truth |
 | Shared retry/backoff in `@fieldops/shared` | In the mobile app | No server-side consumer yet (queues are Phase 5) |
-| Pruning of `processed_mutations` after 90 days | Not yet | A cleanup job belongs with background workers (Phase 5); rows are small |
+| Pruning of `processed_mutations` after 90 days | Done (Phase 5.3) | The daily `sync.purge-processed-mutations` task ([background-tasks.md](background-tasks.md)) |
 
 ---
 

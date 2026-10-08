@@ -28,6 +28,7 @@ import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
+import { RateLimit } from '../rate-limit/rate-limit.decorator.js';
 
 const VALIDATION_FAILED = {
   status: HttpStatus.BAD_REQUEST,
@@ -37,8 +38,8 @@ const VALIDATION_FAILED = {
 /**
  * Authentication endpoints under /api/v1/auth.
  *
- * Rate limiting: register, login and refresh are the V11 limiter's first targets
- * (credential stuffing, account enumeration, token brute force). See docs/authentication.md.
+ * Rate limiting: register, login and change-password use the `auth` policy (per IP: password
+ * guessing, account enumeration), refresh the `refresh` policy. See docs/rate-limiting.md.
  */
 @ApiTags('auth')
 @Controller('auth')
@@ -47,6 +48,7 @@ export class AuthController {
 
   @Post('register')
   @Public()
+  @RateLimit('auth')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Create a WORKER account and sign in',
@@ -69,6 +71,7 @@ export class AuthController {
 
   @Post('login')
   @Public()
+  @RateLimit('auth')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Sign in with email and password',
@@ -93,6 +96,7 @@ export class AuthController {
 
   @Post('refresh')
   @Public()
+  @RateLimit('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Rotate the refresh token and issue a new access token',
@@ -126,6 +130,7 @@ export class AuthController {
   }
 
   @Post('change-password')
+  @RateLimit('auth')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiBearerAuth()
   @ApiOperation({

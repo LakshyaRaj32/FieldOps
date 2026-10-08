@@ -20,6 +20,9 @@ import {
 import type { JobEventType, JobStatus, JobType } from '../job-enums.js';
 import type { JobCursor } from './job-cursor.js';
 
+/** Rows deleted per statement by the purge. */
+const PURGE_BATCH = 1_000;
+
 /** Messages included in a job's details and in the working set. */
 export const MESSAGES_IN_DETAIL = 100;
 
@@ -723,6 +726,25 @@ export class JobsRepository {
    */
   async recordMutation(mutation: MutationRecord): Promise<void> {
     await this.prisma.$transaction(tx => insertMutation(tx, mutation));
+  }
+
+  /**
+   * Forgets device commands recorded before `before` (batched). A retry older than that is
+   * no longer recognised as a replay; the job's version and status checks still refuse it if
+   * it no longer applies. Returns the number deleted.
+   */
+  async purgeMutations(before: Date): Promise<number> {
+    let total = 0;
+    for (;;) {
+      const deleted = await this.prisma.$executeRaw`
+        DELETE FROM processed_mutations WHERE ctid IN (
+          SELECT ctid FROM processed_mutations WHERE created_at < ${before} LIMIT ${PURGE_BATCH}
+        )`;
+      total += deleted;
+      if (deleted < PURGE_BATCH) {
+        return total;
+      }
+    }
   }
 
   /** Deletes the job if it is still PENDING at `expectedVersion`; false otherwise. */

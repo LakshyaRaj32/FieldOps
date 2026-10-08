@@ -130,4 +130,126 @@ describe('parseAppConfig', () => {
     expect(message).toContain('REFRESH_TOKEN_EXPIRATION must be a duration');
     expect(message).toContain('not "*"');
   });
+
+  it('runs without Redis, with rate limiting on and no trusted proxy by default', () => {
+    const config = parseAppConfig(VALID);
+
+    expect(config.redis).toEqual({ url: undefined, keyPrefix: 'fieldops:' });
+    expect(config.rateLimit.enabled).toBe(true);
+    expect(config.rateLimit.policies.auth).toMatchObject({
+      algorithm: 'sliding-window',
+      limit: 20,
+      windowMs: 300_000,
+    });
+    expect(config.trustProxyHops).toBe(0);
+  });
+
+  it('reads Redis, rate-limit overrides and the proxy count', () => {
+    const config = parseAppConfig({
+      ...VALID,
+      REDIS_URL: 'rediss://default:secret@cache.example.com:6380',
+      REDIS_KEY_PREFIX: 'staging:',
+      RATE_LIMIT_ENABLED: 'false',
+      RATE_LIMIT_AUTH: '5/1m',
+      TRUST_PROXY: '1',
+    });
+
+    expect(config.redis).toEqual({
+      url: 'rediss://default:secret@cache.example.com:6380',
+      keyPrefix: 'staging:',
+    });
+    expect(config.rateLimit.enabled).toBe(false);
+    expect(config.rateLimit.policies.auth).toMatchObject({
+      algorithm: 'sliding-window',
+      limit: 5,
+      windowMs: 60_000,
+    });
+    expect(config.rateLimit.policies.default.limit).toBe(120);
+    expect(config.trustProxyHops).toBe(1);
+  });
+
+  it('rejects invalid Redis, rate-limit and proxy settings without echoing secrets', () => {
+    const message = errorOf({
+      ...VALID,
+      REDIS_URL: 'http://user:hunter2@cache',
+      RATE_LIMIT_ENABLED: 'yes',
+      RATE_LIMIT_UPLOAD: '0/1m',
+      RATE_LIMIT_REFRESH: 'lots',
+      TRUST_PROXY: 'true',
+    });
+
+    expect(message).toContain('REDIS_URL must be a redis:// or rediss:// URL.');
+    expect(message).not.toContain('hunter2');
+    expect(message).toContain('RATE_LIMIT_ENABLED must be true or false');
+    expect(message).toContain(
+      'RATE_LIMIT_UPLOAD must be <requests>/<duration>',
+    );
+    expect(message).toContain(
+      'RATE_LIMIT_REFRESH must be <requests>/<duration>',
+    );
+    expect(message).toContain('TRUST_PROXY must be the number of proxies');
+  });
+
+  it('runs workers with a 5 s first retry by default, and reads the overrides', () => {
+    expect(parseAppConfig(VALID).queue).toEqual({
+      workersEnabled: true,
+      retryDelayMs: 5_000,
+    });
+    expect(
+      parseAppConfig({
+        ...VALID,
+        WORKERS_ENABLED: 'false',
+        QUEUE_RETRY_DELAY: '30s',
+      }).queue,
+    ).toEqual({ workersEnabled: false, retryDelayMs: 30_000 });
+    expect(errorOf({ ...VALID, WORKERS_ENABLED: 'no' })).toContain(
+      'WORKERS_ENABLED must be true or false',
+    );
+  });
+
+  it('stores evidence on local disk unless STORAGE_DRIVER=s3', () => {
+    expect(parseAppConfig(VALID).s3).toBeUndefined();
+  });
+
+  it('reads a Cloudflare R2 bucket', () => {
+    const config = parseAppConfig({
+      ...VALID,
+      STORAGE_DRIVER: 's3',
+      S3_ENDPOINT: 'https://0123abcd.r2.cloudflarestorage.com/',
+      S3_BUCKET: 'fieldops-evidence',
+      S3_ACCESS_KEY_ID: 'key-id',
+      S3_SECRET_ACCESS_KEY: 'very-secret',
+    });
+
+    expect(config.s3).toEqual({
+      endpoint: 'https://0123abcd.r2.cloudflarestorage.com',
+      region: 'auto',
+      bucket: 'fieldops-evidence',
+      accessKeyId: 'key-id',
+      secretAccessKey: 'very-secret',
+      forcePathStyle: false,
+    });
+  });
+
+  it('lists every missing or invalid S3 setting without echoing secrets', () => {
+    const message = errorOf({
+      ...VALID,
+      STORAGE_DRIVER: 's3',
+      S3_ENDPOINT: 'ftp://storage',
+      S3_BUCKET: 'Bad_Bucket',
+      S3_SECRET_ACCESS_KEY: 'very-secret',
+      S3_FORCE_PATH_STYLE: 'yes',
+    });
+
+    expect(message).toContain('S3_ENDPOINT must be an http(s) origin');
+    expect(message).toContain('S3_BUCKET must be a bucket name');
+    expect(message).toContain(
+      'S3_ACCESS_KEY_ID is missing (required with STORAGE_DRIVER=s3).',
+    );
+    expect(message).toContain('S3_FORCE_PATH_STYLE must be true or false');
+    expect(message).not.toContain('very-secret');
+    expect(errorOf({ ...VALID, STORAGE_DRIVER: 'gcs' })).toContain(
+      'STORAGE_DRIVER must be local or s3',
+    );
+  });
 });

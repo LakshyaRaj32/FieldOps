@@ -47,9 +47,10 @@ JobsService commit ─▶ DomainEvents ─▶ NotificationsService
 ```
 
 Push runs after the commit, outside the request's transaction, and a failing FCM never fails
-or delays the request. Before Phase 5 there is no retry queue: a push lost to an FCM outage
-stays lost, but the inbox entry exists and sync delivers the data. BullMQ (Phase 5) adds
-retries and backoff.
+or delays the request. Each push is a `push.send` background task, one per device
+([background-tasks.md](background-tasks.md)). A temporary FCM failure is retried with
+exponential backoff (5 attempts), then dead-lettered. Without Redis, a push is tried once,
+inline. The inbox entry exists either way, and sync delivers the data.
 
 ## Device tokens
 

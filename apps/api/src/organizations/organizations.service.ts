@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 
 import { changesOf, writeAudit, type AuditRecord } from '../audit/audit.js';
 import { PasswordService } from '../auth/password.service.js';
+import { CacheKeys } from '../cache/cache-keys.js';
+import { CacheService } from '../cache/cache.service.js';
 import { BusinessErrors } from '../common/errors/business-errors.js';
 import { orgScope } from '../common/tenancy/scope.js';
 import type { AuthenticatedUser } from '../common/types/authenticated-user.js';
@@ -57,6 +59,7 @@ export class OrganizationsService {
     private readonly prisma: PrismaService,
     private readonly users: UsersService,
     private readonly passwords: PasswordService,
+    private readonly cache: CacheService,
   ) {}
 
   async list(): Promise<OrganizationDto[]> {
@@ -191,6 +194,8 @@ export class OrganizationsService {
         });
         return row;
       });
+      // After the commit, so a concurrent reader cannot cache the old time zone again.
+      await this.cache.invalidate(CacheKeys.organizationMoney(id));
       return this.toDto(updated);
     } catch (error) {
       if (isUniqueViolation(error)) {
