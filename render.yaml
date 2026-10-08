@@ -74,3 +74,8 @@ services:
       - key: TRUST_PROXY
         value: 1
 
+      # Background tasks (push delivery, overdue scan, purges) run in this process on the
+      # free plan. Set to false here if a separate worker service is added later.
+      - key: WORKERS_ENABLED
+        value: "true"
+

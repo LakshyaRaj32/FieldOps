@@ -4,8 +4,8 @@ The project is managed in six phases ([master-development-plan.md](master-develo
 This file records where the project stands. Update it at every phase checkpoint.
 
 ```text
-Current Phase:   Phase 5 — Production Engineering (5.1 Redis/caching and 5.2 rate limiting done)
-Phase Status:    IN PROGRESS — next: 5.3 BullMQ workers
+Current Phase:   Phase 5 — Production Engineering (5.1, 5.2 and 5.3 done)
+Phase Status:    IN PROGRESS — next: 5.4 idempotency keys and distributed locks
 Completed Phase: Phase 1 — Foundation
 Next Phase:      Phase 6 — Showcase Release
 ```
@@ -46,7 +46,7 @@ migrated before running the API (`npm run db:deploy`).
 | 2 — Core Product | Jobs (the former V4 job model and screens) | Implemented, device verification pending |
 | 3 — Offline-First | Local SQLite, sync engine, conflict resolution (see the note below) | Implemented, device verification pending |
 | 4 — Field Operations | V7, V8, V9 | Code written; not installed, tested, built or device-verified |
-| 5 — Production Engineering | V10, V11, V12, V13, V15, V18 | In progress: 5.1 and 5.2 done ([below](#phase-5--production-engineering)) |
+| 5 — Production Engineering | V10, V11, V12, V13, V15, V18 | In progress: 5.1, 5.2 and 5.3 done ([below](#phase-5--production-engineering)) |
 | 6 — Showcase Release | V14, V16, V17, V19 | Not started |
 
 **Legacy version numbers for Phase 3.** The master plan maps Phase 3 to "former V4 + V5 +
@@ -709,5 +709,26 @@ refused.
   counters).
 - The policy values against real traffic (Phase 6 load tests).
 
-**Remaining in Phase 5:** 5.3 BullMQ workers, 5.4 HTTP idempotency keys and distributed
-locks (the overdue scan), the Socket.IO Redis adapter, 5.5 observability, 5.6 security review.
+### 5.3 Background tasks with BullMQ (2026-10-08)
+
+**Implemented** ([background-tasks.md](background-tasks.md))
+
+- A `BackgroundTasks` service over BullMQ, with `notifications`, `maintenance` and
+  `dead-letter` queues. Tasks have attempts, exponential backoff, priority, deduplication by
+  ID, permanent failures and dead-lettering. Workers run in the API process
+  (`WORKERS_ENABLED`).
+- `push.send`: pushes leave the event handler. One task per device; the token is read at
+  send time, temporary FCM failures are retried and invalid tokens removed.
+- The overdue scan is now a BullMQ scheduled task (it was a `setInterval` in every instance),
+  so each tick runs once across instances.
+- Two new daily tasks: purging expired sessions and processed device commands older than
+  90 days (both planned in earlier phases).
+- Without Redis, or with Redis down, tasks run inline as before. BullMQ waits are
+  time-bounded, so startup, requests and shutdown never hang on Redis.
+
+**Testing:** `queue.e2e-spec.ts` (needs `TEST_REDIS_URL`). See the session notes for the run
+results.
+
+**Remaining in Phase 5:** 5.4 HTTP idempotency keys, distributed locks and a transactional
+outbox for domain events, the Socket.IO Redis adapter, 5.5 observability (including queue
+metrics), 5.6 security review.

@@ -189,4 +189,21 @@ describe('parseAppConfig', () => {
     );
     expect(message).toContain('TRUST_PROXY must be the number of proxies');
   });
+
+  it('runs workers with a 5 s first retry by default, and reads the overrides', () => {
+    expect(parseAppConfig(VALID).queue).toEqual({
+      workersEnabled: true,
+      retryDelayMs: 5_000,
+    });
+    expect(
+      parseAppConfig({
+        ...VALID,
+        WORKERS_ENABLED: 'false',
+        QUEUE_RETRY_DELAY: '30s',
+      }).queue,
+    ).toEqual({ workersEnabled: false, retryDelayMs: 30_000 });
+    expect(errorOf({ ...VALID, WORKERS_ENABLED: 'no' })).toContain(
+      'WORKERS_ENABLED must be true or false',
+    );
+  });
 });

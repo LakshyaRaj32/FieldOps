@@ -24,10 +24,18 @@ import {
 export class RecordingPushSender implements PushSender {
   readonly sent: { token: string; message: PushMessage }[] = [];
   readonly invalidTokens = new Set<string>();
+  /** The next this-many sends fail temporarily (FCM unavailable). */
+  failNext = 0;
+  attempts = 0;
 
   send(token: string, message: PushMessage): Promise<PushResult> {
+    this.attempts += 1;
     if (this.invalidTokens.has(token)) {
       return Promise.resolve('invalid_token');
+    }
+    if (this.failNext > 0) {
+      this.failNext -= 1;
+      return Promise.resolve('failed');
     }
     this.sent.push({ token, message });
     return Promise.resolve('sent');
@@ -36,6 +44,8 @@ export class RecordingPushSender implements PushSender {
   reset(): void {
     this.sent.length = 0;
     this.invalidTokens.clear();
+    this.failNext = 0;
+    this.attempts = 0;
   }
 }
 

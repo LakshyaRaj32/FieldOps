@@ -43,6 +43,16 @@ export interface RateLimitConfig {
   readonly policies: Readonly<Record<RateLimitPolicyName, RateLimitPolicy>>;
 }
 
+export interface QueueConfig {
+  /**
+   * Whether this process runs the background workers. Every instance enqueues; turn this off
+   * on instances that should only serve HTTP (when a separate worker process runs them).
+   */
+  readonly workersEnabled: boolean;
+  /** First retry delay of a failed task; each further retry doubles it. */
+  readonly retryDelayMs: number;
+}
+
 export interface AppConfig {
   readonly environment: AppEnvironment;
   readonly host: string;
@@ -72,6 +82,7 @@ export interface AppConfig {
    * the socket address is the client (no proxy).
    */
   readonly trustProxyHops: number;
+  readonly queue: QueueConfig;
 }
 
 /** Injection token for AppConfig. */
@@ -264,6 +275,17 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
     );
   }
 
+  const workersValue = read('WORKERS_ENABLED').toLowerCase();
+  let workersEnabled = true;
+  if (workersValue === 'false') {
+    workersEnabled = false;
+  } else if (workersValue !== '' && workersValue !== 'true') {
+    errors.push(
+      `WORKERS_ENABLED must be true or false (received "${workersValue}").`,
+    );
+  }
+  const retryDelayMs = duration('QUEUE_RETRY_DELAY', '5s') * 1000;
+
   if (errors.length > 0) {
     throw new Error(
       `Invalid configuration:\n${errors.map(error => `  - ${error}`).join('\n')}`,
@@ -289,5 +311,6 @@ export function parseAppConfig(env: RawEnvironment): AppConfig {
     redis: { url: redisUrl, keyPrefix },
     rateLimit: { enabled: rateLimitEnabled, policies },
     trustProxyHops,
+    queue: { workersEnabled, retryDelayMs },
   };
 }

@@ -17,6 +17,7 @@ import { NotificationsModule } from './notifications/notifications.module.js';
 import { OrganizationsModule } from './organizations/organizations.module.js';
 import { RateLimitGuard } from './rate-limit/rate-limit.guard.js';
 import { RateLimitModule } from './rate-limit/rate-limit.module.js';
+import { QueueModule } from './queue/queue.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
 import { RedisModule } from './redis/redis.module.js';
 import { ShopsModule } from './shops/shops.module.js';
@@ -30,6 +31,7 @@ import { UsersModule } from './users/users.module.js';
     RedisModule,
     CacheModule,
     RateLimitModule,
+    QueueModule,
     EventsModule,
     StorageModule,
     AccessModule,

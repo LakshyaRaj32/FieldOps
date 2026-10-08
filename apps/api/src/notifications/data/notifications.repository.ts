@@ -104,17 +104,48 @@ export class NotificationsRepository {
   }
 
   /**
-   * Tokens of the user's devices whose session is still usable: revoked or expired sessions
-   * never receive a push, even if their registration was not removed yet.
+   * The user's devices whose session is still usable: revoked or expired sessions never
+   * receive a push, even if their registration was not removed yet.
    */
-  async activeTokens(userId: string, now: Date): Promise<string[]> {
+  async activeDeviceIds(userId: string, now: Date): Promise<string[]> {
     const devices = await this.prisma.pushDevice.findMany({
       where: {
         userId,
         session: { revokedAt: null, expiresAt: { gt: now } },
       },
-      select: { token: true },
+      select: { id: true },
     });
-    return devices.map(device => device.token);
+    return devices.map(device => device.id);
+  }
+
+  /**
+   * What a queued push needs, read when it is sent rather than when it was queued: the
+   * device's current token (tokens rotate). Null when the push must not be sent any more:
+   * the notification or the registration is gone, the session ended, or the device now
+   * belongs to someone else (signed in by another user since).
+   */
+  async pushTarget(
+    notificationId: string,
+    deviceId: string,
+    now: Date,
+  ): Promise<{ token: string; notification: Notification } | null> {
+    const [notification, device] = await Promise.all([
+      this.prisma.notification.findUnique({ where: { id: notificationId } }),
+      this.prisma.pushDevice.findFirst({
+        where: {
+          id: deviceId,
+          session: { revokedAt: null, expiresAt: { gt: now } },
+        },
+        select: { token: true, userId: true },
+      }),
+    ]);
+    if (
+      notification === null ||
+      device === null ||
+      device.userId !== notification.userId
+    ) {
+      return null;
+    }
+    return { token: device.token, notification };
   }
 }
